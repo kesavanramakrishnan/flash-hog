@@ -3,8 +3,9 @@ name = "flash-hob"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
+    "absl-py>=2.4.0",
     "einops>=0.8.1",
     "equinox>=0.13.2",
     "jax[cuda13]>=0.8.0",
@@ -52,3 +53,7 @@ torch = { index = "pytorch-cu130" }
 [[tool.uv.index]]
 name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
+
+
+[tool.ruff]
+line-length = 180
