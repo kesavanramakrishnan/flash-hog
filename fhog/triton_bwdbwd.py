@@ -19,7 +19,7 @@ configs = [
     for BK in [32, 64]
     for s in [3, 4, 7]
     for w in [4, 8]
-]
+]  # fmt: skip
 
 
 def keep(conf):
@@ -186,9 +186,9 @@ def bwdbwd_kernel_stage1(
 
     for j in range(T_k):  # COMPUTING dD_i
         K_j = tl.load(K_block_ptr)
-        V_j = tl.load(V_block_ptr)
+        # V_j = tl.load(V_block_ptr)
         ddK_j = tl.load(ddK_block_ptr)
-        ddV_j = tl.load(ddV_block_ptr)
+        # ddV_j = tl.load(ddV_block_ptr)
 
         # Compute attention scores
         S_ij = tl.dot(Q_i, K_j.T) * scale
@@ -206,9 +206,7 @@ def bwdbwd_kernel_stage1(
         ddK_block_ptr = ddK_block_ptr.advance((K_BLOCK_SIZE, 0))
         ddV_block_ptr = ddV_block_ptr.advance((K_BLOCK_SIZE, 0))
 
-    tl.store(
-        dD_block_ptr, dD_i_acc.to(dD_block_ptr.type.element_ty)
-    )  # Finished computing dD_i
+    tl.store(dD_block_ptr, dD_i_acc.to(dD_block_ptr.type.element_ty))  # Finished computing dD_i
     K_block_ptr = K_block_ptr.advance((-T_k * K_BLOCK_SIZE, 0))
     V_block_ptr = V_block_ptr.advance((-T_k * K_BLOCK_SIZE, 0))
     ddK_block_ptr = ddK_block_ptr.advance((-T_k * K_BLOCK_SIZE, 0))
@@ -233,12 +231,7 @@ def bwdbwd_kernel_stage1(
 
         ddS_ij = (tl.dot(ddQ_i, K_j.T) + tl.dot(Q_i, ddK_j.T)) * scale
 
-        dP2_ij = (
-            tl.dot(dO_i, ddV_j.T)
-            - dP_ij * dD_i_acc[:, None]
-            - ddS_ij * D_i[:, None]
-            + dP_ij * ddS_ij
-        )
+        dP2_ij = tl.dot(dO_i, ddV_j.T) - dP_ij * dD_i_acc[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
         B_i = tl.sum(dP2_ij * P_ij, axis=1)
         B_i_acc += B_i
 
@@ -256,7 +249,7 @@ def bwdbwd_kernel_stage1(
 
     dQ2_i_acc = tl.zeros((Q_BLOCK_SIZE, D), dtype=tl.float32)
     ddO_i_acc = tl.zeros((Q_BLOCK_SIZE, D), dtype=tl.float32)
-    for j in range(T_k):  # COMPUTING B_i
+    for j in range(T_k):  # COMPUTING dQ2_i and ddO_i
         K_j = tl.load(K_block_ptr)
         V_j = tl.load(V_block_ptr)
         ddK_j = tl.load(ddK_block_ptr)
@@ -270,12 +263,7 @@ def bwdbwd_kernel_stage1(
 
         ddS_ij = (tl.dot(ddQ_i, K_j.T) + tl.dot(Q_i, ddK_j.T)) * scale
 
-        dP2_ij = (
-            tl.dot(dO_i, ddV_j.T)
-            - dP_ij * dD_i_acc[:, None]
-            - ddS_ij * D_i[:, None]
-            + dP_ij * ddS_ij
-        )
+        dP2_ij = tl.dot(dO_i, ddV_j.T) - dP_ij * dD_i_acc[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
 
         dS2_ij = P_ij * (dP2_ij - B_i_acc[:, None]) * scale
 
@@ -489,12 +477,7 @@ def bwdbwd_kernel_stage2(
 
         ddS_ij = (tl.dot(ddQ_i, K_j.T) + tl.dot(Q_i, ddK_j.T)) * scale
 
-        dP2_ij = (
-            tl.dot(dO_i, ddV_j.T)
-            - dP_ij * dD_i[:, None]
-            - ddS_ij * D_i[:, None]
-            + dP_ij * ddS_ij
-        )
+        dP2_ij = tl.dot(dO_i, ddV_j.T) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
 
         dS2_ij = P_ij * (dP2_ij - B_i[:, None]) * scale
 
@@ -664,6 +647,7 @@ def test_bwdbwd():
     L = produce_L(Q, K, is_causal=False)
     scale = 1.0 / D**0.5
     flash_bwdbwd(Q, K, V, O, dO, ddQ, ddK, ddV, L, scale)
+    print("Ran successfully!")
 
 
 if __name__ == "__main__":
