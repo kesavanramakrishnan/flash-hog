@@ -79,13 +79,13 @@ def flash_bwdbwd0(
     # dD = jnp.empty_like(D)
     # B = jnp.empty_like(D)
     # Instead just define their shapes and dtypes
-    dQ2_shape_dtype = jax.ShapeDtypeStruct(Q.shape, Q.dtype)
-    ddO_shape_dtype = jax.ShapeDtypeStruct(O.shape, O.dtype)
-    dD_shape_dtype = jax.ShapeDtypeStruct(D.shape, D.dtype)
-    B_shape_dtype = jax.ShapeDtypeStruct(D.shape, D.dtype)
+    dQ2_shape_dtype = jax.ShapeDtypeStruct(Q.shape, dtype)
+    ddO_shape_dtype = jax.ShapeDtypeStruct(O.shape, dtype)
+    dD_shape_dtype = jax.ShapeDtypeStruct(D.shape, jnp.float32)
+    B_shape_dtype = jax.ShapeDtypeStruct(D.shape, jnp.float32)
 
-    dK2_shape_dtype = jax.ShapeDtypeStruct(K.shape, K.dtype)
-    dV2_shape_dtype = jax.ShapeDtypeStruct(V.shape, V.dtype)
+    dK2_shape_dtype = jax.ShapeDtypeStruct(K.shape, dtype)
+    dV2_shape_dtype = jax.ShapeDtypeStruct(V.shape, dtype)
 
     def bwd_bwd_kernel_stage1(
         Q_ref,  # (tile_q, hidden_dim)
@@ -191,8 +191,8 @@ def flash_bwdbwd0(
             dQ2_ddO_loop_body,
             (jnp.zeros((config.tile_q, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_q, hidden_dim), dtype=jnp.float32)),
         )
-        dQ2_ref[:] = dQ2_i
-        ddO_ref[:] = ddO_i
+        dQ2_ref[:] = dQ2_i.astype(dQ2_ref.dtype)
+        ddO_ref[:] = ddO_i.astype(ddO_ref.dtype)
 
     bwd_bwd_stage1 = pl.pallas_call(
         bwd_bwd_kernel_stage1,
@@ -280,8 +280,8 @@ def flash_bwdbwd0(
             dk2_dv2_loop_body,
             (jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32)),
         )
-        dK2_ref[:] = dK2_j
-        dV2_ref[:] = dV2_j
+        dK2_ref[:] = dK2_j.astype(dK2_ref.dtype)
+        dV2_ref[:] = dV2_j.astype(dV2_ref.dtype)
 
     bwd_bwd_stage2 = pl.pallas_call(
         bwd_bwd_kernel_stage2,
@@ -316,14 +316,14 @@ if __name__ == "__main__":
     n_queries = 256
     hidden_dim = 64
     n_keys = 256
-    Q = jrandom.normal(jrandom.PRNGKey(0), (batch_size, n_queries, hidden_dim))
-    K = jrandom.normal(jrandom.PRNGKey(1), (batch_size, n_keys, hidden_dim))
-    V = jrandom.normal(jrandom.PRNGKey(2), (batch_size, n_keys, hidden_dim))
-    O = jrandom.normal(jrandom.PRNGKey(3), (batch_size, n_queries, hidden_dim))
-    dO = jrandom.normal(jrandom.PRNGKey(4), (batch_size, n_queries, hidden_dim))
-    ddQ = jrandom.normal(jrandom.PRNGKey(5), (batch_size, n_queries, hidden_dim))
-    ddK = jrandom.normal(jrandom.PRNGKey(6), (batch_size, n_keys, hidden_dim))
-    ddV = jrandom.normal(jrandom.PRNGKey(7), (batch_size, n_keys, hidden_dim))
+    Q = jrandom.normal(jrandom.PRNGKey(0), (batch_size, n_queries, hidden_dim), dtype=jnp.bfloat16)
+    K = jrandom.normal(jrandom.PRNGKey(1), (batch_size, n_keys, hidden_dim), dtype=jnp.bfloat16)
+    V = jrandom.normal(jrandom.PRNGKey(2), (batch_size, n_keys, hidden_dim), dtype=jnp.bfloat16)
+    O = jrandom.normal(jrandom.PRNGKey(3), (batch_size, n_queries, hidden_dim), dtype=jnp.bfloat16)
+    dO = jrandom.normal(jrandom.PRNGKey(4), (batch_size, n_queries, hidden_dim), dtype=jnp.bfloat16)
+    ddQ = jrandom.normal(jrandom.PRNGKey(5), (batch_size, n_queries, hidden_dim), dtype=jnp.bfloat16)
+    ddK = jrandom.normal(jrandom.PRNGKey(6), (batch_size, n_keys, hidden_dim), dtype=jnp.bfloat16)
+    ddV = jrandom.normal(jrandom.PRNGKey(7), (batch_size, n_keys, hidden_dim), dtype=jnp.bfloat16)
     L = jrandom.normal(jrandom.PRNGKey(8), (batch_size, n_queries))
     scale = 1.0 / hidden_dim**0.5
 
