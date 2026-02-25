@@ -116,11 +116,11 @@ def flash_bwdbwd0(
             ddK_j = ddK_ref[kslice, :]
             # ddV_j = ddV_ref[kslice, :]
 
-            S_ij = pl.dot(Q_i, K_j.T) * scale
+            S_ij = pl.dot(Q_i, K_j, trans_b=True) * scale
             P_ij = jnp.exp(S_ij - L_i[:, None])
 
             # dP_ij = pl.dot(dO_i, V_j.T)
-            ddS_ij = (pl.dot(ddQ_i, K_j.T) + pl.dot(Q_i, ddK_j.T)) * scale
+            ddS_ij = (pl.dot(ddQ_i, K_j, trans_b=True) + pl.dot(Q_i, ddK_j, trans_b=True)) * scale
 
             dD_i = jnp.sum(ddS_ij * P_ij, axis=1)
             dD_i_acc += dD_i
@@ -140,14 +140,14 @@ def flash_bwdbwd0(
             ddK_j = ddK_ref[kslice, :]
             ddV_j = ddV_ref[kslice, :]
 
-            S_ij = pl.dot(Q_i, K_j.T) * scale
+            S_ij = pl.dot(Q_i, K_j, trans_b=True) * scale
             P_ij = jnp.exp(S_ij - L_i[:, None])
 
-            dP_ij = pl.dot(dO_i, V_j.T)
+            dP_ij = pl.dot(dO_i, V_j, trans_b=True)
 
-            ddS_ij = (pl.dot(ddQ_i, K_j.T) + pl.dot(Q_i, ddK_j.T)) * scale
+            ddS_ij = (pl.dot(ddQ_i, K_j, trans_b=True) + pl.dot(Q_i, ddK_j, trans_b=True)) * scale
 
-            dP2_ij = pl.dot(dO_i, ddV_j.T) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
+            dP2_ij = pl.dot(dO_i, ddV_j, trans_b=True) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
             B_i = jnp.sum(dP2_ij * P_ij, axis=1)
             B_i_acc += B_i
 
@@ -166,14 +166,14 @@ def flash_bwdbwd0(
             ddV_j = ddV_ref[kslice, :]
 
             # Compute attention scores
-            S_ij = pl.dot(Q_i, K_j.T) * scale
+            S_ij = pl.dot(Q_i, K_j, trans_b=True) * scale
             P_ij = jnp.exp(S_ij - L_i[:, None])
 
-            dP_ij = pl.dot(dO_i, V_j.T)
+            dP_ij = pl.dot(dO_i, V_j, trans_b=True)
 
-            ddS_ij = (pl.dot(ddQ_i, K_j.T) + pl.dot(Q_i, ddK_j.T)) * scale
+            ddS_ij = (pl.dot(ddQ_i, K_j, trans_b=True) + pl.dot(Q_i, ddK_j, trans_b=True)) * scale
 
-            dP2_ij = pl.dot(dO_i, ddV_j.T) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
+            dP2_ij = pl.dot(dO_i, ddV_j, trans_b=True) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
             dS2_ij = P_ij * (dP2_ij - B_i[:, None]) * scale
 
             dS_ij = scale * P_ij * (dP_ij - D_i[:, None])
@@ -253,24 +253,24 @@ def flash_bwdbwd0(
             D_i = D_ref[qslice]
             dD_i = dD_ref[qslice]
 
-            S_ij = pl.dot(Q_i, K_j.T) * scale
+            S_ij = pl.dot(Q_i, K_j, trans_b=True) * scale
             P_ij = jnp.exp(S_ij - L_i[:, None])
 
-            dP_ij = pl.dot(dO_i, V_j.T)
+            dP_ij = pl.dot(dO_i, V_j, trans_b=True)
 
-            ddS_ij = (pl.dot(ddQ_i, K_j.T) + pl.dot(Q_i, ddK_j.T)) * scale
+            ddS_ij = (pl.dot(ddQ_i, K_j, trans_b=True) + pl.dot(Q_i, ddK_j, trans_b=True)) * scale
 
-            dP2_ij = pl.dot(dO_i, ddV_j.T) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
+            dP2_ij = pl.dot(dO_i, ddV_j, trans_b=True) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
 
             dS2_ij = P_ij * (dP2_ij - B_i[:, None]) * scale
 
             dS_ij = scale * P_ij * (dP_ij - D_i[:, None])
 
             ddP_ij = P_ij * (ddS_ij - dD_i[:, None])
-            dV2_j_acc += pl.dot(ddP_ij.T.astype(dO_i.dtype), dO_i)
+            dV2_j_acc += pl.dot(ddP_ij.astype(dO_i.dtype), dO_i, trans_a=True)
 
-            dK2_j_acc += pl.dot(dS_ij.T.astype(ddQ_i.dtype), ddQ_i)
-            dK2_j_acc += pl.dot(dS2_ij.T.astype(Q_i.dtype), Q_i)
+            dK2_j_acc += pl.dot(dS_ij.astype(ddQ_i.dtype), ddQ_i, trans_a=True)
+            dK2_j_acc += pl.dot(dS2_ij.astype(Q_i.dtype), Q_i, trans_a=True)
 
             return (dV2_j_acc, dK2_j_acc)
 
