@@ -205,8 +205,7 @@ def flash_backward_torch(q, k, v, do, o, L, is_causal: bool):
     S = einsum(q, k, "batch query d, batch key d -> batch query key") * scale
     if is_causal:
         S = torch.where(
-            torch.arange(q.shape[-2], device=q.device)[None, :, None]
-            >= torch.arange(k.shape[-2], device=q.device)[None, None, :],
+            torch.arange(q.shape[-2], device=q.device)[None, :, None] >= torch.arange(k.shape[-2], device=q.device)[None, None, :],
             S,
             -1e6,
         )
