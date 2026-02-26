@@ -1,5 +1,5 @@
 [project]
-name = "flash-hob"
+name = "flash-hog"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -57,3 +57,6 @@ url = "https://download.pytorch.org/whl/cu130"
 
 [tool.ruff]
 line-length = 180
+
+[tool.ruff.lint]
+ignore = ["F722"]
