@@ -57,17 +57,17 @@ def flash_bwdbwd0(
         ddO: Higher order gradients of dO (batch_size, N_QUERIES, HIDDEN_DIM)
     """
     dtype = Q.dtype
-    batch_size, n_queries, hidden_dim = Q.shape
-    n_keys = K.shape[1]
+    batch_size, n_queries, q_heads, hidden_dim = Q.shape
+    n_keys, kv_heads = K.shape[1], K.shape[2]
     # Assert the remaining shapes are consistent
-    assert K.shape == (batch_size, n_keys, hidden_dim)
-    assert V.shape == (batch_size, n_keys, hidden_dim)
-    assert O.shape == (batch_size, n_queries, hidden_dim)
+    assert K.shape == (batch_size, n_keys, kv_heads, hidden_dim)
+    assert V.shape == (batch_size, n_keys, kv_heads, hidden_dim)
+    assert O.shape == (batch_size, n_queries, q_heads, hidden_dim)
     assert dO.shape == (batch_size, n_queries, hidden_dim)
     assert ddQ.shape == (batch_size, n_queries, hidden_dim)
-    assert ddK.shape == (batch_size, n_keys, hidden_dim)
-    assert ddV.shape == (batch_size, n_keys, hidden_dim)
-    assert L.shape == (batch_size, n_queries)
+    assert ddK.shape == (batch_size, n_keys, kv_heads, hidden_dim)
+    assert ddV.shape == (batch_size, n_keys, kv_heads, hidden_dim)
+    assert L.shape == (batch_size, n_queries, q_heads)
     assert config.tile_q > 0 and n_queries % config.tile_q == 0, "Haven't tested that tile_q supports non-divisible n_queries"
 
     # Compute D before the kernel
