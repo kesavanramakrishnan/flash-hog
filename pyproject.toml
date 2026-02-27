@@ -61,3 +61,5 @@ line-length = 180
 
 [tool.ruff.lint]
 ignore = ["F722"]
+
+extend-select = ["ARG005"]
