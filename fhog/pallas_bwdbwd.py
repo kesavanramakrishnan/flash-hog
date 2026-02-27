@@ -42,19 +42,19 @@ def flash_bwdbwd0(
     This implementation is the most generic pallas implementation, and should work on both GPU and TPU.
 
     Args:
-        Q: Query tensor of shape (batch_size, N_QUERIES, HIDDEN_DIM)
-        K: Key tensor of shape (batch_size, N_KEYS, HIDDEN_DIM)
-        V: Value tensor of shape (batch_size, N_KEYS, HIDDEN_DIM)
-        O: Output tensor of shape (batch_size, N_QUERIES, HIDDEN_DIM)
-        dO: Gradient of the output tensor with respect to the input tensor of shape (batch_size, N_QUERIES, HIDDEN_DIM)
-        ddQ: Gradient of the query tensor with respect to the input tensor of shape (batch_size, N_QUERIES, HIDDEN_DIM)
-        ddK: Gradient of the key tensor with respect to the input tensor of shape (batch_size, N_KEYS, HIDDEN_DIM)
-        ddV: Gradient of the value tensor with respect to the input tensor of shape (batch_size, N_KEYS, HIDDEN_DIM)
+        Q: Query tensor of shape (batch_size, N_QUERIES, Q_HEADS, HIDDEN_DIM)
+        K: Key tensor of shape (batch_size, N_KEYS, KV_HEADS, HIDDEN_DIM)
+        V: Value tensor of shape (batch_size, N_KEYS, KV_HEADS, HIDDEN_DIM)
+        O: Output tensor of shape (batch_size, N_QUERIES, Q_HEADS, HIDDEN_DIM)
+        dO: Gradient of the output tensor with respect to the input tensor of shape (batch_size, N_QUERIES, Q_HEADS, HIDDEN_DIM)
+        ddQ: Gradient of the query tensor with respect to the input tensor of shape (batch_size, N_QUERIES, Q_HEADS, HIDDEN_DIM)
+        ddK: Gradient of the key tensor with respect to the input tensor of shape (batch_size, N_KEYS, KV_HEADS, HIDDEN_DIM)
+        ddV: Gradient of the value tensor with respect to the input tensor of shape (batch_size, N_KEYS, KV_HEADS, HIDDEN_DIM)
     Returns:
-        dQ2: Higher order gradients of Q (batch_size, N_QUERIES, HIDDEN_DIM)
-        dK2: Higher order gradients of K (batch_size, N_KEYS, HIDDEN_DIM)
-        dV2: Higher order gradients of V (batch_size, N_KEYS, HIDDEN_DIM)
-        ddO: Higher order gradients of dO (batch_size, N_QUERIES, HIDDEN_DIM)
+        dQ2: Higher order gradients of Q (batch_size, N_QUERIES, Q_HEADS, HIDDEN_DIM)
+        dK2: Higher order gradients of K (batch_size, N_KEYS, KV_HEADS, HIDDEN_DIM)
+        dV2: Higher order gradients of V (batch_size, N_KEYS, KV_HEADS, HIDDEN_DIM)
+        ddO: Higher order gradients of dO (batch_size, N_QUERIES, Q_HEADS, HIDDEN_DIM)
     """
     dtype = Q.dtype
     batch_size, n_queries, q_heads, hidden_dim = Q.shape
@@ -63,15 +63,16 @@ def flash_bwdbwd0(
     assert K.shape == (batch_size, n_keys, kv_heads, hidden_dim)
     assert V.shape == (batch_size, n_keys, kv_heads, hidden_dim)
     assert O.shape == (batch_size, n_queries, q_heads, hidden_dim)
-    assert dO.shape == (batch_size, n_queries, hidden_dim)
-    assert ddQ.shape == (batch_size, n_queries, hidden_dim)
+    assert dO.shape == (batch_size, n_queries, q_heads, hidden_dim)
+    assert ddQ.shape == (batch_size, n_queries, q_heads, hidden_dim)
     assert ddK.shape == (batch_size, n_keys, kv_heads, hidden_dim)
     assert ddV.shape == (batch_size, n_keys, kv_heads, hidden_dim)
-    assert L.shape == (batch_size, n_queries, q_heads)
+    assert L.shape == (batch_size, q_heads, n_queries)  # This weird shape comes from the cuDNN attention kernel
     assert config.tile_q > 0 and n_queries % config.tile_q == 0, "Haven't tested that tile_q supports non-divisible n_queries"
+    assert q_heads == kv_heads, "GQA is not yet implemented"
 
     # Compute D before the kernel
-    D = jnp.einsum("bqd,bqd->bq", dO, O)  # (batch_size, n_queries)
+    D = jnp.einsum("bqhd,bqhd->bqh", dO, O)  # (batch_size, n_queries, q_heads)
 
     # Allocate space for stage 1 outputs
     # dQ2 = jnp.empty_like(Q)
@@ -197,24 +198,25 @@ def flash_bwdbwd0(
     bwd_bwd_stage1 = pl.pallas_call(
         bwd_bwd_kernel_stage1,
         out_shape=(dQ2_shape_dtype, ddO_shape_dtype, dD_shape_dtype, B_shape_dtype),
-        grid=(pl.cdiv(n_queries, config.tile_q), batch_size),
+        grid=(pl.cdiv(n_queries, config.tile_q), batch_size, q_heads),
         in_specs=[
-            pl.BlockSpec((None, config.tile_q, hidden_dim), lambda q, b: (b, q, 0)),  # Q, None indicates to squeeze the index (assuming sliced)
-            pl.BlockSpec((None, n_keys, hidden_dim), lambda q, b: (b, 0, 0)),  # K
-            pl.BlockSpec((None, n_keys, hidden_dim), lambda q, b: (b, 0, 0)),  # V
-            pl.BlockSpec((None, config.tile_q), lambda q, b: (b, q)),  # D
-            pl.BlockSpec((None, config.tile_q, hidden_dim), lambda q, b: (b, q, 0)),  # dO
-            pl.BlockSpec((None, config.tile_q, hidden_dim), lambda q, b: (b, q, 0)),  # ddQ
-            pl.BlockSpec((None, n_keys, hidden_dim), lambda q, b: (b, 0, 0)),  # ddK
-            pl.BlockSpec((None, n_keys, hidden_dim), lambda q, b: (b, 0, 0)),  # ddV
-            pl.BlockSpec((None, config.tile_q), lambda q, b: (b, q)),  # L
+            pl.BlockSpec((None, config.tile_q, None, hidden_dim), lambda q, b, h: (b, q, h, 0)),  # Q, None indicates to squeeze the index (assuming sliced)
+            pl.BlockSpec((None, n_keys, None, hidden_dim), lambda _q, b, h: (b, 0, h, 0)),  # K
+            pl.BlockSpec((None, n_keys, None, hidden_dim), lambda _q, b, h: (b, 0, h, 0)),  # V
+            pl.BlockSpec((None, config.tile_q, None), lambda q, b, h: (b, q, h)),  # D
+            pl.BlockSpec((None, config.tile_q, None, hidden_dim), lambda q, b, h: (b, q, h, 0)),  # dO
+            pl.BlockSpec((None, config.tile_q, None, hidden_dim), lambda q, b, h: (b, q, h, 0)),  # ddQ
+            pl.BlockSpec((None, n_keys, None, hidden_dim), lambda _q, b, h: (b, 0, h, 0)),  # ddK
+            pl.BlockSpec((None, n_keys, None, hidden_dim), lambda _q, b, h: (b, 0, h, 0)),  # ddV
+            pl.BlockSpec((None, None, config.tile_q), lambda q, b, h: (b, h, q)),  # L
         ],
         out_specs=[
-            pl.BlockSpec((None, config.tile_q, hidden_dim), lambda q, b: (b, q, 0)),  # dQ2
-            pl.BlockSpec((None, config.tile_q, hidden_dim), lambda q, b: (b, q, 0)),  # ddO
-            pl.BlockSpec((None, config.tile_q), lambda q, b: (b, q)),  # dD
-            pl.BlockSpec((None, config.tile_q), lambda q, b: (b, q)),  # B
+            pl.BlockSpec((None, config.tile_q, None, hidden_dim), lambda q, b, h: (b, q, h, 0)),  # dQ2
+            pl.BlockSpec((None, config.tile_q, None, hidden_dim), lambda q, b, h: (b, q, h, 0)),  # ddO
+            pl.BlockSpec((None, config.tile_q, None), lambda q, b, h: (b, q, h)),  # dD
+            pl.BlockSpec((None, config.tile_q, None), lambda q, b, h: (b, q, h)),  # B
         ],
+        compiler_params=tlgpu.CompilerParams(num_stages=2, num_warps=4),
     )
 
     dQ2, ddO, dD, B = bwd_bwd_stage1(Q, K, V, D, dO, ddQ, ddK, ddV, L)
@@ -286,24 +288,25 @@ def flash_bwdbwd0(
     bwd_bwd_stage2 = pl.pallas_call(
         bwd_bwd_kernel_stage2,
         out_shape=(dK2_shape_dtype, dV2_shape_dtype),
-        grid=(pl.cdiv(n_keys, config.tile_k), batch_size),
+        grid=(pl.cdiv(n_keys, config.tile_k), batch_size, q_heads),
         in_specs=[
-            pl.BlockSpec((None, n_queries, hidden_dim), lambda k, b: (b, 0, 0)),  # Q
-            pl.BlockSpec((None, config.tile_k, hidden_dim), lambda k, b: (b, k, 0)),  # K
-            pl.BlockSpec((None, config.tile_k, hidden_dim), lambda k, b: (b, k, 0)),  # V
-            pl.BlockSpec((None, n_queries), lambda k, b: (b, 0)),  # D
-            pl.BlockSpec((None, n_queries, hidden_dim), lambda k, b: (b, 0, 0)),  # dO
-            pl.BlockSpec((None, n_queries, hidden_dim), lambda k, b: (b, 0, 0)),  # ddQ
-            pl.BlockSpec((None, config.tile_k, hidden_dim), lambda k, b: (b, k, 0)),  # ddK
-            pl.BlockSpec((None, config.tile_k, hidden_dim), lambda k, b: (b, k, 0)),  # ddV
-            pl.BlockSpec((None, n_queries), lambda k, b: (b, 0)),  # L
-            pl.BlockSpec((None, n_queries), lambda k, b: (b, 0)),  # dD
-            pl.BlockSpec((None, n_queries), lambda k, b: (b, 0)),  # B
+            pl.BlockSpec((None, n_queries, None, hidden_dim), lambda _k, b, h: (b, 0, h, 0)),  # Q
+            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h, 0)),  # K
+            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h, 0)),  # V
+            pl.BlockSpec((None, n_queries, None), lambda _k, b, h: (b, 0, h)),  # D
+            pl.BlockSpec((None, n_queries, None, hidden_dim), lambda _k, b, h: (b, 0, h, 0)),  # dO
+            pl.BlockSpec((None, n_queries, None, hidden_dim), lambda _k, b, h: (b, 0, h, 0)),  # ddQ
+            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h, 0)),  # ddK
+            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h, 0)),  # ddV
+            pl.BlockSpec((None, None, n_queries), lambda _k, b, h: (b, h, 0)),  # L (weird shape from cuDNN)
+            pl.BlockSpec((None, n_queries, None), lambda _k, b, h: (b, 0, h)),  # dD
+            pl.BlockSpec((None, n_queries, None), lambda _k, b, h: (b, 0, h)),  # B
         ],
         out_specs=[
-            pl.BlockSpec((None, config.tile_k, hidden_dim), lambda k, b: (b, k, 0)),  # dK2
-            pl.BlockSpec((None, config.tile_k, hidden_dim), lambda k, b: (b, k, 0)),  # dV2
+            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h, 0)),  # dK2
+            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h, 0)),  # dV2
         ],
+        compiler_params=tlgpu.CompilerParams(num_stages=2, num_warps=4),
     )
 
     dK2, dV2 = bwd_bwd_stage2(Q, K, V, D, dO, ddQ, ddK, ddV, L, dD, B)
