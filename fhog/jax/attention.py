@@ -62,8 +62,13 @@ def _dot_product_attention_fwd_bwd(mask_type: bool, scale: float, res, g):
     Backward through the saving forward pass.
     """
     print("Running _dot_product_attention_fwd_bwd")
-    dO = attn_impl.dot_product_attention_bwd_rule(mask_type=mask_type, scale=scale, res=res, g=g)
-    return dO
+    # breakpoint()
+    dO, dvjp_fun = g
+    dQ2, dK2, dV2 = dvjp_fun.args_res
+    # *_, stats, out = dvjp_fun.opaque_residuals  # TODO: Do I need dO from here?
+
+    dQ, dK, dV = attn_impl.dot_product_attention_bwd_rule(mask_type=mask_type, scale=scale, res=res, g=dO)
+    return dQ + dQ2, dK + dK2, dV + dV2
 
 
 _dot_product_attention_fwd.defvjp(_dot_product_attention_fwd_fwd, _dot_product_attention_fwd_bwd)
@@ -75,8 +80,8 @@ def _dot_product_attention_bwd(mask_type: MaskType, scale: float, res, g):
     Regular backward pass.
     """
     print("Running _dot_product_attention_bwd")
-    dO = attn_impl.dot_product_attention_bwd_rule(mask_type=mask_type, scale=scale, res=res, g=g)
-    return dO
+    grads = attn_impl.dot_product_attention_bwd_rule(mask_type=mask_type, scale=scale, res=res, g=g)
+    return grads
 
 
 def _dot_product_attention_bwd_fwd(mask_type: MaskType, scale: float, res, g):
@@ -93,8 +98,8 @@ def _dot_product_attention_bwd_bwd(mask_type: MaskType, scale: float, res, g):
     Backward pass through the backward pass.
     """
     print("Running _dot_product_attention_bwd_bwd")
-    dQ2, dK2, dV2, ddO = attn_impl.dot_product_attention_bwd_rule_bwd_rule(mask_type=mask_type, scale=scale, res=res, g=g)
-    return dQ2, dK2, dV2, ddO
+    grads = attn_impl.dot_product_attention_bwd_rule_bwd_rule(mask_type=mask_type, scale=scale, res=res, g=g)
+    return grads
 
 
 _dot_product_attention_bwd.defvjp(_dot_product_attention_bwd_fwd, _dot_product_attention_bwd_bwd)

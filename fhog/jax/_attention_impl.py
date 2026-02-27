@@ -34,8 +34,9 @@ def dot_product_attention_bwd_rule(mask_type: MaskType, scale: float, res, g):
     Backward pass, no saving
     """
     vjp_fun = res
-    dout = vjp_fun(g)
-    return dout
+    # breakpoint()
+    dQ, dK, dV = vjp_fun(g)
+    return dQ, dK, dV
 
 
 def dot_product_attention_bwd_rule_fwd_rule(mask_type: MaskType, scale: float, res, g):
@@ -45,10 +46,10 @@ def dot_product_attention_bwd_rule_fwd_rule(mask_type: MaskType, scale: float, r
     vjp_fun = res
     dO = g
 
-    query, key, value = vjp_fun.args_res
-    *_, stats, out = vjp_fun.opaque_residuals
+    # query, key, value = vjp_fun.args_res
+    # *_, stats, out = vjp_fun.opaque_residuals
     dQ, dK, dV = vjp_fun(dO)
-    residual = (query, key, value, stats, out, dO)
+    residual = (vjp_fun, dO)
 
     return (dQ, dK, dV), residual
 
@@ -57,8 +58,14 @@ def dot_product_attention_bwd_rule_bwd_rule(mask_type: MaskType, scale: float, r
     """
     Backward pass through the backward pass
     """
-    query, key, value, stats, out, dO = res
+    vjp_fun, dO = res
+    query, key, value = vjp_fun.args_res
+    *_, stats, out = vjp_fun.opaque_residuals
+    vjp_fun_structure = jax.tree.structure(vjp_fun)
+    # breakpoint()
+
     ddQ, ddK, ddV = g
 
-    dQ2, dK2, dV2, ddO = flash_bwdbwd0(query, key, value, out, dO, ddQ, ddK, ddV, stats, scale, config=TuningConfig(tile_q=128, tile_k=128, max_concurrent_steps=4))
-    return dQ2, dK2, dV2, ddO
+    dQ2, dK2, dV2, ddO = flash_bwdbwd0(query, key, value, out, dO, ddQ, ddK, ddV, stats, scale, config=TuningConfig(tile_q=128, tile_k=32, max_concurrent_steps=4))
+    vjp_fun_grad = jax.tree.unflatten(vjp_fun_structure, [dQ2, dK2, dV2, None, None, None])  # TODO: Don't I need new dO in the last argument here?
+    return vjp_fun_grad, ddO
