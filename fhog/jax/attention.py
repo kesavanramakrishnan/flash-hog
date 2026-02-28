@@ -44,8 +44,8 @@ def _dot_product_attention_fwd(query, key, value, mask_type: bool, scale: float)
     Forward pass, saving for regular backward.
     """
     print("Running _dot_product_attention_fwd")
-    out, vjp_fun = attn_impl.dot_product_attention_fwd_rule(query, key, value, mask_type=mask_type, scale=scale)
-    return out, vjp_fun
+    out, res = attn_impl.dot_product_attention_fwd_rule(query, key, value, mask_type=mask_type, scale=scale)
+    return out, res
 
 
 def _dot_product_attention_fwd_fwd(query, key, value, mask_type: bool, scale: float):
@@ -69,6 +69,7 @@ def _dot_product_attention_fwd_bwd(mask_type: bool, scale: float, res, g):
 
     dQ, dK, dV = attn_impl.dot_product_attention_bwd_rule(mask_type=mask_type, scale=scale, res=res, g=dO)
     return dQ + dQ2, dK + dK2, dV + dV2
+    # return dQ, dK, dV
 
 
 _dot_product_attention_fwd.defvjp(_dot_product_attention_fwd_fwd, _dot_product_attention_fwd_bwd)
