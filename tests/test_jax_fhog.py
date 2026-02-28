@@ -106,15 +106,15 @@ def test_jax_fhog_backward():
 
 def test_jax_fhog_backward_backward():
     keys = jrandom.split(jrandom.PRNGKey(42), 10)
-    q = jrandom.normal(keys[0], (1, 128, 32, 64), dtype=jnp.bfloat16)
-    k = jrandom.normal(keys[1], (1, 128, 32, 64), dtype=jnp.bfloat16)
-    v = jrandom.normal(keys[2], (1, 128, 32, 64), dtype=jnp.bfloat16)
-    do = jrandom.normal(keys[3], (1, 128, 32, 64), dtype=jnp.bfloat16)
-    ddq = jrandom.normal(keys[4], (1, 128, 32, 64), dtype=jnp.bfloat16)
-    ddk = jrandom.normal(keys[5], (1, 128, 32, 64), dtype=jnp.bfloat16)
-    ddv = jrandom.normal(keys[6], (1, 128, 32, 64), dtype=jnp.bfloat16)
+    q = jrandom.normal(keys[0], (1, 512, 32, 64), dtype=jnp.bfloat16)
+    k = jrandom.normal(keys[1], (1, 256, 16, 64), dtype=jnp.bfloat16)
+    v = jrandom.normal(keys[2], (1, 256, 16, 64), dtype=jnp.bfloat16)
+    do = jrandom.normal(keys[3], (1, 512, 32, 64), dtype=jnp.bfloat16)
+    ddq = jrandom.normal(keys[4], (1, 512, 32, 64), dtype=jnp.bfloat16)
+    ddk = jrandom.normal(keys[5], (1, 256, 16, 64), dtype=jnp.bfloat16)
+    ddv = jrandom.normal(keys[6], (1, 256, 16, 64), dtype=jnp.bfloat16)
 
-    is_causal = False
+    is_causal = True
     scale = 1.0 / sqrt(q.shape[-1])
 
     ref_dpa_bwd = make_reference_dpa_bwd_bwd(q, k, v, do, is_causal, scale)  # Only supported for xla
@@ -126,4 +126,14 @@ def test_jax_fhog_backward_backward():
     print(ref_output)
     print(fhog_output)
 
-    chex.assert_trees_all_close(ref_output, fhog_output)
+    from wadler_lindig import pprint
+
+    pprint(ref_output)
+    ref_output_zeros = jax.tree.map(lambda x: jnp.mean(x == 0.0), ref_output)
+    fhog_output_zeros = jax.tree.map(lambda x: jnp.mean(x == 0.0), fhog_output)
+    print(jnp.mean(ref_output[0][0, 1, :, :] == 0.0))
+
+    print(f"ref_output: {ref_output_zeros=}")
+    print(f"fhog_output: {fhog_output_zeros=}")
+
+    chex.assert_trees_all_close(fhog_output, ref_output)
