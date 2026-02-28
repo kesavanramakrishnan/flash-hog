@@ -107,12 +107,12 @@ def test_jax_fhog_backward():
 def test_jax_fhog_backward_backward():
     keys = jrandom.split(jrandom.PRNGKey(42), 10)
     q = jrandom.normal(keys[0], (1, 512, 32, 64), dtype=jnp.bfloat16)
-    k = jrandom.normal(keys[1], (1, 256, 16, 64), dtype=jnp.bfloat16)
-    v = jrandom.normal(keys[2], (1, 256, 16, 64), dtype=jnp.bfloat16)
+    k = jrandom.normal(keys[1], (1, 512, 16, 64), dtype=jnp.bfloat16)
+    v = jrandom.normal(keys[2], (1, 512, 16, 64), dtype=jnp.bfloat16)
     do = jrandom.normal(keys[3], (1, 512, 32, 64), dtype=jnp.bfloat16)
     ddq = jrandom.normal(keys[4], (1, 512, 32, 64), dtype=jnp.bfloat16)
-    ddk = jrandom.normal(keys[5], (1, 256, 16, 64), dtype=jnp.bfloat16)
-    ddv = jrandom.normal(keys[6], (1, 256, 16, 64), dtype=jnp.bfloat16)
+    ddk = jrandom.normal(keys[5], (1, 512, 16, 64), dtype=jnp.bfloat16)
+    ddv = jrandom.normal(keys[6], (1, 512, 16, 64), dtype=jnp.bfloat16)
 
     is_causal = True
     scale = 1.0 / sqrt(q.shape[-1])
