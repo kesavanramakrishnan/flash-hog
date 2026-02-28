@@ -39,9 +39,6 @@ def maybe_causal_mask(A_ij, qi, kj, causal_mask):
     return A_ij
 
 
-
-
-
 # @flash_bwdbwd.def_vmap
 # def _flash_bwdbwd0_vmap(axis_size, in_batched, Q, K, V, O, dO, ddQ, ddK, ddV, L, mask_type: MaskType, scale: float, config: TuningConfig):
 #     return
@@ -83,6 +80,8 @@ def _flash_bwdbwd0(
     dtype = Q.dtype
     batch_size, n_queries, q_heads, hidden_dim = Q.shape
     n_keys, kv_heads = K.shape[1], K.shape[2]
+    assert n_queries % config.tile_q == 0, f"{n_queries=} must be divisible by {config.tile_q=} for now"
+    assert n_keys % config.tile_k == 0, f"{n_keys=} must be divisible by {config.tile_k=} for now"
     # Assert the remaining shapes are consistent
     assert K.shape == (batch_size, n_keys, kv_heads, hidden_dim)
     assert V.shape == (batch_size, n_keys, kv_heads, hidden_dim)
