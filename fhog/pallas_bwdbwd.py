@@ -9,7 +9,7 @@ import jax.experimental.pallas.triton as tlgpu
 import jax.numpy as jnp
 import jax.random as jrandom
 from einops import einsum, rearrange
-from jax import Array, lax
+from jax import Array
 from jax._src.cudnn.fused_attention_stablehlo import MaskType
 from jax.extend import backend
 from jaxtyping import PyTree
@@ -39,7 +39,17 @@ def maybe_causal_mask(A_ij, qi, kj, causal_mask):
     return A_ij
 
 
-def flash_bwdbwd0(
+# @jax.custom_batching.custom_vmap
+def flash_bwdbwd(Q, K, V, O, dO, ddQ, ddK, ddV, L, mask_type: MaskType, scale: float | None, config: TuningConfig):
+    return _flash_bwdbwd0(Q, K, V, O, dO, ddQ, ddK, ddV, L, mask_type, scale, config)
+
+
+# @flash_bwdbwd.def_vmap
+# def _flash_bwdbwd0_vmap(axis_size, in_batched, Q, K, V, O, dO, ddQ, ddK, ddV, L, mask_type: MaskType, scale: float, config: TuningConfig):
+#     return
+
+
+def _flash_bwdbwd0(
     Q: Array,
     K: Array,
     V: Array,
@@ -50,7 +60,7 @@ def flash_bwdbwd0(
     ddV: Array,
     L: Array,
     mask_type: MaskType,
-    scale: float,
+    scale: float | None,
     config: TuningConfig,
 ):
     """
@@ -87,6 +97,10 @@ def flash_bwdbwd0(
     assert config.tile_q > 0 and n_queries % config.tile_q == 0, "Haven't tested that tile_q supports non-divisible n_queries"
     assert q_heads % kv_heads == 0, "GQA is not yet implemented"
     assert mask_type in [MaskType.NO_MASK, MaskType.CAUSAL], "Only NO_MASK and CAUSAL are supported"
+    assert n_keys >= n_queries, "n_keys must be greater than or equal to n_queries"
+
+    if scale is None:
+        scale = hidden_dim**-0.5
 
     group_size = q_heads // kv_heads
     (Q, O, dO, ddQ, L) = tree_rearrange((Q, O, dO, ddQ, L), "... (kv_heads group) final_dim -> ... kv_heads group final_dim", group=group_size)
@@ -160,8 +174,7 @@ def flash_bwdbwd0(
             # # How many k tiles in total (the difference requires causal masking)
             # num_required_k_tiles = pl.cdiv((q_tile_index + 1) * config.tile_q - 1, config.tile_k)
 
-            # TODO: Safety margin by using q_tile_index - 1 instead of q_tile_index. This is a hack.
-            num_unmasked_k_tiles = jnp.maximum(pl.cdiv((q_tile_index - 1) * config.tile_q - config.tile_k + 1, config.tile_k), 0)
+            num_unmasked_k_tiles = pl.cdiv(q_tile_index * config.tile_q - config.tile_k + 1, config.tile_k)
             num_required_k_tiles = jnp.minimum(pl.cdiv((q_tile_index + 1) * config.tile_q - 1, config.tile_k) + 1, pl.cdiv(n_keys, config.tile_k))
             dD_i = jax.lax.fori_loop(0, num_unmasked_k_tiles, dd_loop_body, jnp.zeros((config.tile_q,), dtype=jnp.float32))
             dD_i = jax.lax.fori_loop(num_unmasked_k_tiles, num_required_k_tiles, partial(dd_loop_body, causal_mask=True), dD_i)
@@ -191,8 +204,6 @@ def flash_bwdbwd0(
             dP_ij = pl.dot(dO_i, V_j, trans_b=True)
 
             ddS_ij = (pl.dot(ddQ_i, K_j, trans_b=True) + pl.dot(Q_i, ddK_j, trans_b=True)) * scale
-            # TODO
-            # ddS_ij = maybe_causal_mask(ddS_ij, q_indices, k_indices, causal_mask)
 
             dP2_ij = pl.dot(dO_i, ddV_j, trans_b=True) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
             B_i = jnp.sum(dP2_ij * P_ij, axis=1)
@@ -202,8 +213,7 @@ def flash_bwdbwd0(
 
         if mask_type == MaskType.CAUSAL:
             # num_unmasked_k_tiles = (q_tile_index * config.tile_q - config.tile_k + 1) // config.tile_k
-            # TODO: Safety margin by using q_tile_index - 1 instead of q_tile_index. This is a hack.
-            num_unmasked_k_tiles = jnp.maximum(pl.cdiv((q_tile_index - 1) * config.tile_q - config.tile_k + 1, config.tile_k), 0)
+            num_unmasked_k_tiles = pl.cdiv(q_tile_index * config.tile_q - config.tile_k + 1, config.tile_k)
             num_required_k_tiles = jnp.minimum(pl.cdiv((q_tile_index + 1) * config.tile_q - 1, config.tile_k) + 1, pl.cdiv(n_keys, config.tile_k))
             B_i = jax.lax.fori_loop(0, num_unmasked_k_tiles, b_loop_body, jnp.zeros((config.tile_q,), dtype=jnp.float32))
             B_i = jax.lax.fori_loop(num_unmasked_k_tiles, num_required_k_tiles, partial(b_loop_body, causal_mask=True), B_i)
@@ -231,8 +241,6 @@ def flash_bwdbwd0(
             dP_ij = pl.dot(dO_i, V_j, trans_b=True)
 
             ddS_ij = (pl.dot(ddQ_i, K_j, trans_b=True) + pl.dot(Q_i, ddK_j, trans_b=True)) * scale
-            # TODO: Probably causal mask here?
-            # ddS_ij = maybe_causal_mask(ddS_ij, q_indices, k_indices, causal_mask)
 
             dP2_ij = pl.dot(dO_i, ddV_j, trans_b=True) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
             dS2_ij = P_ij * (dP2_ij - B_i[:, None]) * scale
@@ -248,16 +256,7 @@ def flash_bwdbwd0(
             return (dQ2_i_acc, ddO_i_acc)
 
         if mask_type == MaskType.CAUSAL:
-            # num_unmasked_k_tiles = jnp.minimum(jnp.maximum((q_tile_index * config.tile_q - config.tile_k + 1) // config.tile_k - 1, 0), 2)
-            # (n * 128 - 32 + 1) // 32
-            # TODO: This should be q_tile_index instead of q_tile_index - 1, but it gives the wrong answer.
-            num_unmasked_k_tiles = jnp.maximum(pl.cdiv((q_tile_index - 1) * config.tile_q - config.tile_k + 1, config.tile_k), 0)
-
-            # pl.debug_print("q_tile_index: ", q_tile_index)
-            # pl.debug_print("num_unmasked_k_tiles: ", num_unmasked_k_tiles)
-            # print("tile_q: ", config.tile_q)
-            # print("tile_k: ", config.tile_k)
-            # num_unmasked_k_tiles = 0
+            num_unmasked_k_tiles = pl.cdiv(q_tile_index * config.tile_q - config.tile_k + 1, config.tile_k)
 
             num_required_k_tiles = jnp.minimum(pl.cdiv((q_tile_index + 1) * config.tile_q - 1, config.tile_k) + 1, pl.cdiv(n_keys, config.tile_k))
             dQ2_i, ddO_i = jax.lax.fori_loop(
@@ -267,13 +266,6 @@ def flash_bwdbwd0(
                 (jnp.zeros((config.tile_q, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_q, hidden_dim), dtype=jnp.float32)),
             )
             dQ2_i, ddO_i = jax.lax.fori_loop(num_unmasked_k_tiles, num_required_k_tiles, partial(dQ2_ddO_loop_body, causal_mask=True), (dQ2_i, ddO_i))
-            # dQ2_i, ddO_i = jax.lax.fori_loop(
-            #     0,
-            #     pl.cdiv(n_keys, config.tile_k),
-            #     partial(dQ2_ddO_loop_body, causal_mask=True),
-            #     (jnp.zeros((config.tile_q, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_q, hidden_dim), dtype=jnp.float32)),
-            # )
-
         else:
             dQ2_i, ddO_i = jax.lax.fori_loop(
                 0,
@@ -281,12 +273,6 @@ def flash_bwdbwd0(
                 dQ2_ddO_loop_body,
                 (jnp.zeros((config.tile_q, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_q, hidden_dim), dtype=jnp.float32)),
             )
-        # dQ2_i, ddO_i = jax.lax.fori_loop(
-        #     0,
-        #     pl.cdiv(n_keys, config.tile_k),
-        #     dQ2_ddO_loop_body,
-        #     (jnp.zeros((config.tile_q, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_q, hidden_dim), dtype=jnp.float32)),
-        # )
         dQ2_ref[:] = dQ2_i.astype(dQ2_ref.dtype)
         ddO_ref[:] = ddO_i.astype(ddO_ref.dtype)
 
@@ -363,7 +349,6 @@ def flash_bwdbwd0(
             dP_ij = pl.dot(dO_i, V_j, trans_b=True)
 
             ddS_ij = (pl.dot(ddQ_i, K_j, trans_b=True) + pl.dot(Q_i, ddK_j, trans_b=True)) * scale
-            # ddS_ij = maybe_causal_mask(ddS_ij, q_indices, k_indices, causal_mask)
 
             dP2_ij = pl.dot(dO_i, ddV_j, trans_b=True) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
 
@@ -390,12 +375,6 @@ def flash_bwdbwd0(
                 (jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32)),
             )
             dV2_j, dK2_j = jax.lax.fori_loop(end_masked_q_tile, num_required_q_tiles, partial(dk2_dv2_loop_body, causal_mask=True), (dV2_j, dK2_j))
-            # dV2_j, dK2_j = jax.lax.fori_loop(
-            #     0,
-            #     pl.cdiv(n_queries, config.tile_q),
-            #     partial(dk2_dv2_loop_body, causal_mask=True),
-            #     (jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32)),
-            # )
         else:
             dV2_j, dK2_j = jax.lax.fori_loop(
                 0,
@@ -403,12 +382,6 @@ def flash_bwdbwd0(
                 dk2_dv2_loop_body,
                 (jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32)),
             )
-        # dV2_j, dK2_j = jax.lax.fori_loop(
-        #     0,
-        #     pl.cdiv(n_queries, config.tile_q),
-        #     dk2_dv2_loop_body,
-        #     (jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32)),
-        # )
         dK2_ref[:] = dK2_j.astype(dK2_ref.dtype)
         dV2_ref[:] = dV2_j.astype(dV2_ref.dtype)
 
@@ -470,7 +443,7 @@ if __name__ == "__main__":
         tile_k=32,
         max_concurrent_steps=4,
     )
-    out = flash_bwdbwd0(Q, K, V, O, dO, ddQ, ddK, ddV, L, scale, config)
+    out = flash_bwdbwd(Q, K, V, O, dO, ddQ, ddK, ddV, L, scale, config)
     print(out)
     # out = jax.jit(partial(matmul6, config=config))(a, b)
     # print(out)
