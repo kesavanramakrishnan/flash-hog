@@ -1,20 +1,15 @@
 [project]
 name = "flash-hog"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.1.1"
+description = "Kernels for higher order gradients of Flash Attention."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "absl-py>=2.4.0",
     "chex>=0.1.91",
     "einops>=0.8.1",
-    "equinox>=0.13.2",
     "jax[cuda13]>=0.8.0",
     "nvidia-cutlass-dsl>=4.2.1",
-    "pytest>=8.4.2",
-    "ruff>=0.14.2",
-    "torch>=2.9.0",
-    "ty>=0.0.1a24",
 ]
 
 [build-system]
@@ -38,15 +33,15 @@ index-strategy = "unsafe-best-match"
 [project.scripts]
 main = "fhog.main:main"
 
-[tool.uv.extra-build-dependencies]
-flash-attn = [
-    { requirement = "torch", match-runtime = true },
-    "packaging",
-    "wheel",
-]
+# [tool.uv.extra-build-dependencies]
+# flash-attn = [
+#     { requirement = "torch", match-runtime = true },
+#     "packaging",
+#     "wheel",
+# ]
 
-[tool.uv.extra-build-variables] # To build on GB10
-flash-attn = { CUDA_HOME = "/usr/local/cuda", FLASH_ATTENTION_TRITON_AMD_ENABLE = "TRUE", MAX_JOBS = "10", FLASH_ATTN_CUDA_ARCHS = "120" }
+# [tool.uv.extra-build-variables] # To build on GB10
+# flash-attn = { CUDA_HOME = "/usr/local/cuda", FLASH_ATTENTION_TRITON_AMD_ENABLE = "TRUE", MAX_JOBS = "10", FLASH_ATTN_CUDA_ARCHS = "120" }
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu130" }
@@ -63,3 +58,13 @@ line-length = 180
 ignore = ["F722"]
 
 extend-select = ["ARG005"]
+
+[dependency-groups]
+dev = [
+    "equinox>=0.13.4",
+    "ipython>=9.10.0",
+    "pytest>=9.0.2",
+    "ruff>=0.15.4",
+    "torch>=2.9.0",
+    "ty>=0.0.19",
+]
