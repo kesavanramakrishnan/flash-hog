@@ -66,6 +66,19 @@ def dot_product_attention_bwd_rule_bwd_rule(mask_type: MaskType, scale: float, r
 
     ddQ, ddK, ddV = g
 
-    dQ2, dK2, dV2, ddO = flash_bwdbwd0(query, key, value, out, dO, ddQ, ddK, ddV, stats, scale, config=TuningConfig(tile_q=128, tile_k=32, max_concurrent_steps=4))
+    dQ2, dK2, dV2, ddO = flash_bwdbwd0(
+        Q=query,
+        K=key,
+        V=value,
+        O=out,
+        dO=dO,
+        ddQ=ddQ,
+        ddK=ddK,
+        ddV=ddV,
+        L=stats,
+        mask_type=mask_type,
+        scale=scale,
+        config=TuningConfig(tile_q=128, tile_k=32, max_concurrent_steps=4),
+    )
     vjp_fun_grad = jax.tree.unflatten(vjp_fun_structure, [dQ2, dK2, dV2, None, None, None])  # TODO: Don't I need new dO in the last argument here?
     return vjp_fun_grad, ddO
