@@ -62,6 +62,7 @@ extend-select = ["ARG005"]
 [dependency-groups]
 dev = [
     "equinox>=0.13.4",
+    "ipdb>=0.13.13",
     "ipython>=9.10.0",
     "pytest>=9.0.2",
     "ruff>=0.15.4",
