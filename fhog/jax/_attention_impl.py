@@ -7,7 +7,6 @@ from functools import partial
 import jax
 from jax._src.cudnn.fused_attention_stablehlo import MaskType
 from jax._src.cudnn.fused_attention_stablehlo import dot_product_attention as cuda_dot_product_attention
-from jax.tree_util import Partial
 
 from fhog.jax._pallas_gpu_kernel import TuningConfig, flash_bwdbwd
 

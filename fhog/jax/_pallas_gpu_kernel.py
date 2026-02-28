@@ -39,9 +39,7 @@ def maybe_causal_mask(A_ij, qi, kj, causal_mask):
     return A_ij
 
 
-# @jax.custom_batching.custom_vmap
-def flash_bwdbwd(Q, K, V, O, dO, ddQ, ddK, ddV, L, mask_type: MaskType, scale: float | None, config: TuningConfig):
-    return _flash_bwdbwd0(Q, K, V, O, dO, ddQ, ddK, ddV, L, mask_type, scale, config)
+
 
 
 # @flash_bwdbwd.def_vmap
