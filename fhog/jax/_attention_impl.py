@@ -9,7 +9,7 @@ from jax._src.cudnn.fused_attention_stablehlo import MaskType
 from jax._src.cudnn.fused_attention_stablehlo import dot_product_attention as cuda_dot_product_attention
 from jax.tree_util import Partial
 
-from fhog.pallas_bwdbwd import TuningConfig, flash_bwdbwd0
+from fhog.jax._pallas_gpu_kernel import TuningConfig, flash_bwdbwd
 
 
 def dot_product_attention_fwd(query, key, value, mask_type: MaskType, scale: float):
@@ -66,7 +66,7 @@ def dot_product_attention_bwd_rule_bwd_rule(mask_type: MaskType, scale: float, r
 
     ddQ, ddK, ddV = g
 
-    dQ2, dK2, dV2, ddO = flash_bwdbwd0(
+    dQ2, dK2, dV2, ddO = flash_bwdbwd(
         Q=query,
         K=key,
         V=value,
