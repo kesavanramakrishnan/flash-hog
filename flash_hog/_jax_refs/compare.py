@@ -1,5 +1,5 @@
-import fhog.jax_refs.jax_impl as jax_impl
-import fhog.jax_refs.torch_impl as torch_impl
+import flash_hog.jax_refs.jax_impl as jax_impl
+import flash_hog.jax_refs.torch_impl as torch_impl
 import numpy as np
 
 print("Loading libraries...")

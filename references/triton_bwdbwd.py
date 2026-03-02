@@ -10,7 +10,7 @@ Shiv Sundram
 import torch
 import triton
 import triton.language as tl
-from fhog.triton_flash import produce_L
+from flash_hog.triton_flash import produce_L
 
 
 def cdiv(a, b):

@@ -6,8 +6,8 @@ import jax.numpy as jnp
 import torch
 from einops import einsum
 
-# from fhog.triton_bwdbwd import use_bwdbwd
-# from fhog.triton_flash import produce_L, run_regular_attention
+# from flash_hog.triton_bwdbwd import use_bwdbwd
+# from flash_hog.triton_flash import produce_L, run_regular_attention
 
 
 # @partial(torch.vmap, in_dims=(0, 0, 0, 0, 0, 0, 0, 0, 0, None, None))
@@ -220,10 +220,10 @@ def main():
     torch.testing.assert_close(torch_ddo, expected_ddo)
 
     # TODO: change this to use the jax implementation!
-    # from fhog.jax_refs.jax_impls import attn_bwd_bwd
-    # from fhog.jax_refs.jax_impl import attn_bwd_bwd as non_flash_attn_bwd_bwd
+    # from flash_hog.jax_refs.jax_impls import attn_bwd_bwd
+    # from flash_hog.jax_refs.jax_impl import attn_bwd_bwd as non_flash_attn_bwd_bwd
 
-    # fhog.jax_refs.jax_impls
+    # flash_hog.jax_refs.jax_impls
     # return
 
     # dq2, dk2, dv2, ddo = non_flash_attn_bwd_bwd(

@@ -4,8 +4,8 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import torch
 import triton
-from fhog.jax_refs.jax_impl import attn_bwd_bwd
-from fhog.triton_bwdbwd import flash_bwdbwd
+from flash_hog.jax_refs.jax_impl import attn_bwd_bwd
+from flash_hog.triton_bwdbwd import flash_bwdbwd
 
 N_REPS = 5000
 N_WARMUP = 300

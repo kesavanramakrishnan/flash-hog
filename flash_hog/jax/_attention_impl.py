@@ -1,12 +1,11 @@
 """
-Implementations for the functions used in fhog.jax.attention.
+Implementations for the functions used in flash_hog.jax.attention.
 """
 
 from functools import partial
 
 import jax
 import jax.numpy as jnp
-from fhog.jax._pallas_gpu import TuningConfig, flash_bwdbwd
 from jax._src.cudnn.fused_attention_stablehlo import (
     AttentionLayout,
     MaskType,
@@ -18,6 +17,8 @@ from jax._src.cudnn.fused_attention_stablehlo import (
 )
 from jax.experimental.custom_partitioning import ArrayMapping, SdyShardingRule
 from jax.experimental.layout import Layout, with_layout_constraint
+
+from flash_hog.jax._pallas_gpu import TuningConfig, flash_bwdbwd
 
 # ---------------------------------------------------------------------------
 # Monkey-patch: fix the cuDNN backward sharding rule

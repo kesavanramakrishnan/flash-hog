@@ -9,7 +9,7 @@ from jax.experimental.layout import Layout, with_layout_constraint
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
-import fhog.jax.attention as attn
+import flash_hog.jax.attention as attn
 
 
 def reference_dpa(q, k, v, is_causal: bool, scale: float, implementation: str = "xla"):
@@ -70,7 +70,7 @@ def make_fhog_dpa_bwd_bwd(q, k, v, do, is_causal: bool, scale: float):
 #     print(dV)
 
 
-def test_jax_fhog_backward():
+def test_jax_fhog_backward_single():
     keys = jrandom.split(jrandom.PRNGKey(42), 10)
     q = jrandom.normal(keys[0], (1, 128, 32, 64), dtype=jnp.bfloat16)
     k = jrandom.normal(keys[1], (1, 128, 32, 64), dtype=jnp.bfloat16)
