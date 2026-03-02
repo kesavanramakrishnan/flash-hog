@@ -1,7 +1,15 @@
+"""
+Written as a part of the 2026 CUDA Mode hackathon by
+Marcel Roed
+Neil Band
+Herman Brunborg
+Stephen Ge
+Shiv Sundram
+"""
+
 import torch
 import triton
 import triton.language as tl
-
 from fhog.triton_flash import produce_L
 
 

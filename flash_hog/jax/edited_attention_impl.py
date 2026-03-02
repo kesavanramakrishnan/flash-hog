@@ -6,6 +6,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+from fhog.jax._pallas_gpu import TuningConfig, flash_bwdbwd
 from jax._src.cudnn.fused_attention_stablehlo import (
     AttentionLayout,
     MaskType,
@@ -17,8 +18,6 @@ from jax._src.cudnn.fused_attention_stablehlo import (
 )
 from jax.experimental.custom_partitioning import ArrayMapping, SdyShardingRule
 from jax.experimental.layout import Layout, with_layout_constraint
-
-from fhog.jax._pallas_gpu import TuningConfig, flash_bwdbwd
 
 # ---------------------------------------------------------------------------
 # Monkey-patch: fix the cuDNN backward sharding rule
@@ -99,15 +98,24 @@ def dot_product_attention_fwd(query, key, value, mask_type: MaskType, scale: flo
     Forward pass, no saving.
     Only needs to return the output.
     """
+    # query, key, value = with_layout_constraint((query, key, value), _BTNH_LAYOUT)
     return cuda_dot_product_attention(query, key, value, mask_type=mask_type, scale=scale)
 
 
 def dot_product_attention_fwd_rule(query, key, value, mask_type: MaskType, scale: float):
     """
-    Forward pass, saving stats, Q, K, V and O.
+    Forward pass, saving Q, K, V, stats and O as a tuple.
     """
-    out, vjp_fun = jax.vjp(partial(cuda_dot_product_attention, mask_type=mask_type, scale=scale), query, key, value)
-    residual = vjp_fun
+    # query, key, value = with_layout_constraint((query, key, value), _BTNH_LAYOUT)
+    out, stats = cuda_dot_product_attention(
+        query,
+        key,
+        value,
+        mask_type=mask_type,
+        scale=scale,
+        return_residual=True,
+    )
+    residual = (query, key, value, stats, out)
     return out, residual
 
 
@@ -115,23 +123,108 @@ def dot_product_attention_bwd_rule(mask_type: MaskType, scale: float, res, g):
     """
     Backward pass, no saving
     """
-    vjp_fun = res
-    # breakpoint()
-    dQ, dK, dV = vjp_fun(g)
+    query, key, value, stats, out = res
+    dQ, dK, dV = cudnn_dot_product_attention_bwd(
+        query,
+        key,
+        value,
+        stats,
+        out,
+        g,
+        mask_type=mask_type,
+        scale=scale,
+    )
     return dQ, dK, dV
+
+
+def cudnn_dot_product_attention_bwd(
+    query,
+    key,
+    value,
+    activation,
+    fwd_output,
+    grad_output,
+    mask_type: MaskType,
+    scale: float,
+):
+    """
+    Calls the cuDNN backward rule directly with the saved forward residuals.
+    """
+    # cuDNN requires the last (head) dimension to have stride 1 (row-major layout).
+    # When tensors arrive as custom_vjp residuals in a sharded context, XLA may
+    # choose non-standard layouts, so we explicitly constrain them here.
+    # query, key, value, fwd_output, grad_output = with_layout_constraint((query, key, value, fwd_output, grad_output), _BTNH_LAYOUT)
+    _not_used = jnp.zeros(0, dtype=query.dtype)
+    res = (
+        query,
+        key,
+        value,
+        _not_used,  # bias
+        _not_used,  # q_seqlen
+        _not_used,  # kv_seqlen
+        _not_used,  # q_offsets
+        _not_used,  # kv_offsets
+        _not_used,  # page_table_k
+        _not_used,  # page_table_v
+        activation,
+        fwd_output,
+    )
+    grads = _dot_product_attention_bwd_rule(
+        scale=scale,
+        seed=42,
+        dropout_rate=0.0,
+        variadic_args=(False, False),
+        mask_type=mask_type,
+        layout=AttentionLayout.BTNH.value,
+        sliding_window_length=None,
+        is_training=True,
+        return_residual=False,
+        res=res,
+        grad_output=grad_output,
+    )
+    dQ, dK, dV = grads[:3]
+    return dQ, dK, dV
+
+
+def dot_product_attention_fwd_bwd_rule(mask_type: MaskType, scale: float, res, g):
+    """
+    Backward through the saving forward pass.
+    """
+    dO, dres = g
+    dQ2, dK2, dV2, _, _ = dres
+
+    query, key, value, stats, out = res
+    dQ, dK, dV = cudnn_dot_product_attention_bwd(
+        query,
+        key,
+        value,
+        stats,
+        out,
+        dO,
+        mask_type=mask_type,
+        scale=scale,
+    )
+    return dQ + dQ2, dK + dK2, dV + dV2
 
 
 def dot_product_attention_bwd_rule_fwd_rule(mask_type: MaskType, scale: float, res, g):
     """
     Backward pass, saving for higher order backward
     """
-    vjp_fun = res
+    query, key, value, stats, out = res
     dO = g
 
-    # query, key, value = vjp_fun.args_res
-    # *_, stats, out = vjp_fun.opaque_residuals
-    dQ, dK, dV = vjp_fun(dO)
-    residual = (vjp_fun, dO)
+    dQ, dK, dV = cudnn_dot_product_attention_bwd(
+        query,
+        key,
+        value,
+        stats,
+        out,
+        dO,
+        mask_type=mask_type,
+        scale=scale,
+    )
+    residual = (query, key, value, stats, out, dO)
 
     return (dQ, dK, dV), residual
 
@@ -140,11 +233,7 @@ def dot_product_attention_bwd_rule_bwd_rule(mask_type: MaskType, scale: float, r
     """
     Backward pass through the backward pass
     """
-    vjp_fun, dO = res
-    query, key, value = vjp_fun.args_res
-    *_, stats, out = vjp_fun.opaque_residuals
-    vjp_fun_structure = jax.tree.structure(vjp_fun)
-    # breakpoint()
+    query, key, value, stats, out, dO = res
 
     ddQ, ddK, ddV = g
 
@@ -162,5 +251,9 @@ def dot_product_attention_bwd_rule_bwd_rule(mask_type: MaskType, scale: float, r
         scale=scale,
         config=TuningConfig(tile_q=128, tile_k=32, max_concurrent_steps=4),
     )
-    vjp_fun_grad = jax.tree.unflatten(vjp_fun_structure, [dQ2, dK2, dV2, None, None, None])  # TODO: Don't I need new dO in the last argument here?
-    return vjp_fun_grad, ddO
+
+    res_grad = (dQ2, dK2, dV2, None, None)
+    return res_grad, ddO
+
+
+# return attn_impl.dot_product_attention_fwd_bwd_rule(mask_type=mask_type, scale=scale, res=res, g=g)

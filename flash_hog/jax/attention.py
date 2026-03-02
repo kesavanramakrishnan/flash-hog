@@ -4,13 +4,12 @@ Main interface for Jax attention with support for higher order memory-efficient 
 
 from functools import partial
 
+import fhog.jax._attention_impl as attn_impl
 import jax
 import jax.numpy as jnp
 from jax import Array
 from jax._src.cudnn.fused_attention_stablehlo import MaskType
 from jaxtyping import Bool, Float, Int
-
-import fhog.jax._attention_impl as attn_impl
 
 # Reimplementation of much of jax._src.cudnn.fused_attention_stablehlo as used in jax.nn.dot_product_attention
 

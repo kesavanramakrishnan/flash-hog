@@ -1,7 +1,6 @@
-import numpy as np
-
 import fhog.jax_refs.jax_impl as jax_impl
 import fhog.jax_refs.torch_impl as torch_impl
+import numpy as np
 
 print("Loading libraries...")
 
@@ -12,9 +11,7 @@ import torch
 print("Imported libraries.")
 
 
-def compare_jax_and_torch(
-    *, stats, q, k, v, o, do, ddq, ddk, ddv, scale=1.0, is_causal=False
-):
+def compare_jax_and_torch(*, stats, q, k, v, o, do, ddq, ddk, ddv, scale=1.0, is_causal=False):
     jax_out = jax_impl.attn_bwd_bwd_stats(
         stats=stats,
         q=q,
@@ -45,9 +42,7 @@ def compare_jax_and_torch(
 
 
 if __name__ == "__main__":
-    key1, key2, key3, key4, key5, key6, key7, key8, key9 = jrandom.split(
-        jrandom.PRNGKey(42), 9
-    )
+    key1, key2, key3, key4, key5, key6, key7, key8, key9 = jrandom.split(jrandom.PRNGKey(42), 9)
     nq = 128
     nkv = 256
     d_in = 64

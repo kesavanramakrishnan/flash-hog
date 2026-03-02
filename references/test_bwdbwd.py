@@ -9,12 +9,8 @@ from pathlib import Path
 
 def main():
     test_data_folder = Path("test_data")
-    (input_tensors_path := test_data_folder / "input_items").mkdir(
-        parents=True, exist_ok=True
-    )
-    (output_tensors_path := test_data_folder / "output_items").mkdir(
-        parents=True, exist_ok=True
-    )
+    (input_tensors_path := test_data_folder / "input_items").mkdir(parents=True, exist_ok=True)
+    (output_tensors_path := test_data_folder / "output_items").mkdir(parents=True, exist_ok=True)
 
     # torch.save(torch.tensor(q), input_tensors_path / "q.pt")
     # torch.save(torch.tensor(k), input_tensors_path / "k.pt")
@@ -66,13 +62,9 @@ def main():
         expected_dv2.unsqueeze(0),
     )
 
-    o = torch.nn.functional.scaled_dot_product_attention(
-        q, k, v, scale=1 / d_in**0.5, is_causal=False
-    )
+    o = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=1 / d_in**0.5, is_causal=False)
     L = produce_L(q, k, is_causal=False)
-    triton_dq2, triton_dk2, triton_dv2, triton_ddo = flash_bwdbwd(
-        q, k, v, o, do, ddq, ddk, ddv, L, 1 / d_in**0.5
-    )
+    triton_dq2, triton_dk2, triton_dv2, triton_ddo = flash_bwdbwd(q, k, v, o, do, ddq, ddk, ddv, L, 1 / d_in**0.5)
 
     print(triton_dq2)
     print(expected_dq2)
