@@ -1,3 +1,1 @@
-# from flash_hog.triton_bwdbwd import flash_bwdbwd
-
-# __all__ = ["flash_bwdbwd"]
+from flash_hog.jax.attention import dot_product_attention
