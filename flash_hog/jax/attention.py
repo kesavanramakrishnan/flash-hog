@@ -73,14 +73,12 @@ def _dot_product_attention_fwd_bwd(mask_type: bool, scale: float, res, g):
     Backward through the saving forward pass.
     """
     print("Running _dot_product_attention_fwd_bwd")
-    # breakpoint()
-    dO, dvjp_fun = g
-    dQ2, dK2, dV2 = dvjp_fun.args_res
-    # *_, stats, out = dvjp_fun.opaque_residuals  # TODO: Do I need dO from here?
+    dO, d_res = g
+    # d_res matches the residual tuple structure: (query, key, value, *unused, activation, out)
+    dQ2, dK2, dV2 = d_res[0], d_res[1], d_res[2]
 
     dQ, dK, dV = attn_impl.dot_product_attention_bwd_rule(mask_type=mask_type, scale=scale, res=res, g=dO)
     return dQ + dQ2, dK + dK2, dV + dV2
-    # return dQ, dK, dV
 
 
 _dot_product_attention_fwd.defvjp(_dot_product_attention_fwd_fwd, _dot_product_attention_fwd_bwd)

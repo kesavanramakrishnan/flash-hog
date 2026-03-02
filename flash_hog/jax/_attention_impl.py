@@ -91,7 +91,23 @@ def _fixed_dot_product_attention_bwd_shardy_rule(
 
 _dot_product_attention_bwd_lower.sharding_rule = _fixed_dot_product_attention_bwd_shardy_rule
 
-# _BTNH_LAYOUT = Layout(major_to_minor=(0, 1, 2, 3))
+# Static parameters for our use case (no bias, no seqlen masking, no dropout)
+_SEED = 42
+_DROPOUT_RATE = 0.0
+_VARIADIC_ARGS = (False, False)  # (has_bias, has_dbias)
+_LAYOUT = AttentionLayout.BTNH.value
+_SLIDING_WINDOW_LENGTH = None
+
+
+def _make_bwd_residual(query, key, value, activation, out):
+    """
+    Build the residual tuple expected by _dot_product_attention_bwd_rule:
+      (query, key, value, bias, q_seqlen, kv_seqlen, q_offsets, kv_offsets,
+       page_table_k, page_table_v, activation, fwd_output)
+    Unused optional fields are filled with empty arrays.
+    """
+    _not_used = jnp.zeros(0, dtype=query.dtype)
+    return (query, key, value, _not_used, _not_used, _not_used, _not_used, _not_used, _not_used, _not_used, activation, out)
 
 
 def dot_product_attention_fwd(query, key, value, mask_type: MaskType, scale: float):
@@ -104,48 +120,52 @@ def dot_product_attention_fwd(query, key, value, mask_type: MaskType, scale: flo
 
 def dot_product_attention_fwd_rule(query, key, value, mask_type: MaskType, scale: float):
     """
-    Forward pass, saving stats, Q, K, V and O.
+    Forward pass, saving Q, K, V, activation (logsumexp) and O as an explicit
+    residual tuple for the backward pass.
     """
-    out, vjp_fun = jax.vjp(partial(cuda_dot_product_attention, mask_type=mask_type, scale=scale), query, key, value)
-    residual = vjp_fun
-    return out, residual
+    out, activation = cuda_dot_product_attention(query, key, value, mask_type=mask_type, scale=scale, return_residual=True)
+    res = _make_bwd_residual(query, key, value, activation, out)
+    return out, res
 
 
 def dot_product_attention_bwd_rule(mask_type: MaskType, scale: float, res, g):
     """
-    Backward pass, no saving
+    Backward pass, no saving.
     """
-    vjp_fun = res
-    # breakpoint()
-    dQ, dK, dV = vjp_fun(g)
-    return dQ, dK, dV
+    grads = _dot_product_attention_bwd_rule(
+        scale,
+        _SEED,
+        _DROPOUT_RATE,
+        _VARIADIC_ARGS,
+        mask_type,
+        _LAYOUT,
+        _SLIDING_WINDOW_LENGTH,
+        True,
+        False,
+        res,
+        g,
+    )
+    return grads[0], grads[1], grads[2]
 
 
 def dot_product_attention_bwd_rule_fwd_rule(mask_type: MaskType, scale: float, res, g):
     """
-    Backward pass, saving for higher order backward
+    Backward pass, saving for higher order backward.
     """
-    vjp_fun = res
+    query, key, value = res[0], res[1], res[2]
+    activation, out = res[10], res[11]
     dO = g
 
-    # query, key, value = vjp_fun.args_res
-    # *_, stats, out = vjp_fun.opaque_residuals
-    dQ, dK, dV = vjp_fun(dO)
-    residual = (vjp_fun, dO)
-
+    dQ, dK, dV = dot_product_attention_bwd_rule(mask_type=mask_type, scale=scale, res=res, g=dO)
+    residual = (query, key, value, out, activation, dO)
     return (dQ, dK, dV), residual
 
 
 def dot_product_attention_bwd_rule_bwd_rule(mask_type: MaskType, scale: float, res, g):
     """
-    Backward pass through the backward pass
+    Backward pass through the backward pass.
     """
-    vjp_fun, dO = res
-    query, key, value = vjp_fun.args_res
-    *_, stats, out = vjp_fun.opaque_residuals
-    vjp_fun_structure = jax.tree.structure(vjp_fun)
-    # breakpoint()
-
+    query, key, value, out, activation, dO = res
     ddQ, ddK, ddV = g
 
     dQ2, dK2, dV2, ddO = flash_bwdbwd(
@@ -157,10 +177,13 @@ def dot_product_attention_bwd_rule_bwd_rule(mask_type: MaskType, scale: float, r
         ddQ=ddQ,
         ddK=ddK,
         ddV=ddV,
-        L=stats,
+        L=activation,
         mask_type=mask_type,
         scale=scale,
         config=TuningConfig(tile_q=128, tile_k=32, max_concurrent_steps=4),
     )
-    vjp_fun_grad = jax.tree.unflatten(vjp_fun_structure, [dQ2, dK2, dV2, None, None, None])  # TODO: Don't I need new dO in the last argument here?
-    return vjp_fun_grad, ddO
+    # Return gradients matching the structure of (res, g).
+    # res = _make_bwd_residual(query, key, value, activation, out) — a 12-tuple.
+    # Gradients w.r.t. the unused placeholder fields and activation/out are None.
+    d_res = (dQ2, dK2, dV2, None, None, None, None, None, None, None, None, None)
+    return d_res, ddO
