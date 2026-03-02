@@ -15,12 +15,11 @@ import flash_hog.jax._attention_impl as attn_impl
 # Reimplementation of much of jax._src.cudnn.fused_attention_stablehlo as used in jax.nn.dot_product_attention
 
 
-@partial(jax.custom_vjp, nondiff_argnames=["mask_type", "scale"])
 def dot_product_attention(
     query: Float[Array, "T N H"],
     key: Float[Array, "S N H"],
     value: Float[Array, "S N H"],
-    mask_type: MaskType = MaskType.NO_MASK,
+    is_causal: bool = False,
     scale: float | None = None,
 ):
     """
@@ -35,6 +34,18 @@ def dot_product_attention(
         scale = query.shape[-1] ** -0.5
     dtype = query.dtype
     assert dtype == key.dtype == value.dtype
+    mask_type = MaskType.CAUSAL if is_causal else MaskType.NO_MASK
+    return _dot_product_attention(query, key, value, mask_type=mask_type, scale=scale)
+
+
+@partial(jax.custom_vjp, nondiff_argnames=["mask_type", "scale"])
+def _dot_product_attention(
+    query,
+    key,
+    value,
+    mask_type: MaskType,
+    scale: float,
+):
     return attn_impl.dot_product_attention_fwd(query, key, value, mask_type=mask_type, scale=scale)
 
 
@@ -105,4 +116,4 @@ def _dot_product_attention_bwd_bwd(mask_type: MaskType, scale: float, res, g):
 
 _dot_product_attention_bwd.defvjp(_dot_product_attention_bwd_fwd, _dot_product_attention_bwd_bwd)
 
-dot_product_attention.defvjp(_dot_product_attention_fwd, _dot_product_attention_bwd)
+_dot_product_attention.defvjp(_dot_product_attention_fwd, _dot_product_attention_bwd)
