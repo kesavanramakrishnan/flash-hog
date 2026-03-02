@@ -1,10 +1,10 @@
 from pathlib import Path
 
-import jax.numpy as jnp
-import torch
+# import jax.numpy as jnp
+# # import torch
 
-from fhog.triton_bwdbwd import flash_bwdbwd
-from fhog.triton_flash import produce_L, run_regular_attention
+# from fhog.triton_bwdbwd import flash_bwdbwd
+# from fhog.triton_flash import produce_L, run_regular_attention
 
 
 def main():
