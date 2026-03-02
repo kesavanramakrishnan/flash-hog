@@ -165,10 +165,11 @@ def test_jax_fhog_backward_backward_single_noncausal():
     fhog_bwd = make_fhog_dpa_bwd_bwd(q, k, v, do, is_causal, scale)
 
     ref_output = ref_dpa_bwd(ddq, ddk, ddv)
-    fhog_output = fhog_bwd(ddq, ddk, ddv)
+    fhog_output = jax.jit(fhog_bwd)(ddq, ddk, ddv)
 
     from wadler_lindig import pprint
 
+    failed_one = False
     for i, (fhog_output_item, ref_output_item) in enumerate(zip(fhog_output, ref_output)):
         try:
             chex.assert_trees_all_close(fhog_output_item, ref_output_item, rtol=100, atol=0.04)
