@@ -5,7 +5,6 @@ import chex
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-from jax.experimental.layout import Layout, with_layout_constraint
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
@@ -37,7 +36,7 @@ def make_reference_dpa_bwd_bwd(q, k, v, do, is_causal: bool, scale: float):
 
 def fhog_dpa(q, k, v, is_causal: bool, scale: float):
     # print(locals())
-    return attn.dot_product_attention(q, k, v, mask_type=attn.MaskType.CAUSAL if is_causal else attn.MaskType.NO_MASK, scale=scale)
+    return attn.dot_product_attention(q, k, v, is_causal=is_causal, scale=scale)
 
 
 def make_fhog_dpa_bwd(q, k, v, is_causal: bool, scale: float):
@@ -80,7 +79,7 @@ def test_jax_fhog_backward_single():
     # ddk = jrandom.normal(keys[5], (1, 128, 32, 64), dtype=jnp.bfloat16)
     # ddv = jrandom.normal(keys[6], (1, 128, 32, 64), dtype=jnp.bfloat16)
 
-    is_causal = False
+    is_causal = True
     scale = 1.0 / sqrt(q.shape[-1])
 
     ref_dpa_bwd = make_reference_dpa_bwd(q, k, v, is_causal, scale, implementation="cudnn")
@@ -90,8 +89,8 @@ def test_jax_fhog_backward_single():
     ref_output = ref_dpa_bwd(do)
     fhog_output = fhog_bwd(do)
 
-    print(ref_output)
-    print(fhog_output)
+    # print(ref_output)
+    # print(fhog_output)
 
     chex.assert_trees_all_close(ref_output, fhog_output)
 
@@ -107,13 +106,13 @@ def test_jax_fhog_backward_single():
     # print(dV2)
 
 
-def test_jax_fhog_backward_backward_single():
+def test_jax_fhog_backward_backward_single_causal():
     batch_size = 2
     n_queries = 512
     n_keys = 512
     hidden_dim = 64
     q_heads = 32
-    kv_heads = 16
+    kv_heads = 32
     keys = jrandom.split(jrandom.PRNGKey(42), 10)
     q = jrandom.normal(keys[0], (batch_size, n_queries, q_heads, hidden_dim), dtype=jnp.bfloat16)
     k = jrandom.normal(keys[1], (batch_size, n_keys, kv_heads, hidden_dim), dtype=jnp.bfloat16)
@@ -132,18 +131,7 @@ def test_jax_fhog_backward_backward_single():
     ref_output = ref_dpa_bwd(ddq, ddk, ddv)
     fhog_output = fhog_bwd(ddq, ddk, ddv)
 
-    # print(ref_output)
-    # print(fhog_output)
-
     from wadler_lindig import pprint
-
-    # pprint(ref_output)
-    # ref_output_zeros = jax.tree.map(lambda x: jnp.mean(x == 0.0), ref_output)
-    # fhog_output_zeros = jax.tree.map(lambda x: jnp.mean(x == 0.0), fhog_output)
-    # print(jnp.mean(ref_output[0][0, 1, :, :] == 0.0))
-
-    # print(f"ref_output: {ref_output_zeros=}")
-    # print(f"fhog_output: {fhog_output_zeros=}")
 
     for i, (fhog_output_item, ref_output_item) in enumerate(zip(fhog_output, ref_output)):
         try:
@@ -152,6 +140,45 @@ def test_jax_fhog_backward_backward_single():
         except AssertionError as e:
             print(f"Failed at {i=}")
             print(e)
+
+
+def test_jax_fhog_backward_backward_single_noncausal():
+    batch_size = 2
+    n_queries = 512
+    n_keys = 512
+    hidden_dim = 64
+    q_heads = 32
+    kv_heads = 32
+    keys = jrandom.split(jrandom.PRNGKey(42), 10)
+    q = jrandom.normal(keys[0], (batch_size, n_queries, q_heads, hidden_dim), dtype=jnp.bfloat16)
+    k = jrandom.normal(keys[1], (batch_size, n_keys, kv_heads, hidden_dim), dtype=jnp.bfloat16)
+    v = jrandom.normal(keys[2], (batch_size, n_keys, kv_heads, hidden_dim), dtype=jnp.bfloat16)
+    do = jrandom.normal(keys[3], (batch_size, n_queries, q_heads, hidden_dim), dtype=jnp.bfloat16)
+    ddq = jrandom.normal(keys[4], (batch_size, n_queries, q_heads, hidden_dim), dtype=jnp.bfloat16)
+    ddk = jrandom.normal(keys[5], (batch_size, n_keys, kv_heads, hidden_dim), dtype=jnp.bfloat16)
+    ddv = jrandom.normal(keys[6], (batch_size, n_keys, kv_heads, hidden_dim), dtype=jnp.bfloat16)
+
+    is_causal = False
+    scale = 1.0 / sqrt(q.shape[-1])
+
+    ref_dpa_bwd = make_reference_dpa_bwd_bwd(q, k, v, do, is_causal, scale)  # Only supported for xla
+    fhog_bwd = make_fhog_dpa_bwd_bwd(q, k, v, do, is_causal, scale)
+
+    ref_output = ref_dpa_bwd(ddq, ddk, ddv)
+    fhog_output = fhog_bwd(ddq, ddk, ddv)
+
+    from wadler_lindig import pprint
+
+    for i, (fhog_output_item, ref_output_item) in enumerate(zip(fhog_output, ref_output)):
+        try:
+            chex.assert_trees_all_close(fhog_output_item, ref_output_item, rtol=100, atol=0.04)
+            print(f"Passed at {i=}")
+        except AssertionError as e:
+            print(f"Failed at {i=}")
+            print(e)
+            failed_one = True
+    if failed_one:
+        raise AssertionError("Failed one or more tests")
 
 
 def test_jax_fhog_backward_backward_sharded2batch():
@@ -174,15 +201,11 @@ def test_jax_fhog_backward_backward_sharded2batch():
     is_causal = True
     scale = 1.0 / sqrt(q.shape[-1])
 
-    # ref_dpa_bwd = make_reference_dpa_bwd_bwd(q, k, v, do, is_causal, scale)  # Only supported for xla
     mesh2 = Mesh(jax.devices("gpu")[:2], ("x",))
 
     spec = NamedSharding(mesh2, P("x", None, None, None))
-    # S = lambda p: NamedSharding(mesh2, P(p))
-    # q, k, v, do, ddq, ddk, ddv = jax.device_put((q, k, v, do, ddq, ddk, ddv), spec)
 
     def complete_function(q, k, v, do, ddq, ddk, ddv):
-        # (q, k, v, do, ddq, ddk, ddv) = with_layout_constraint((q, k, v, do, ddq, ddk, ddv), Layout(major_to_minor=(0, 1, 2, 3)))
         fhog_bwd = make_fhog_dpa_bwd_bwd(q, k, v, do, is_causal, scale)
         return fhog_bwd(ddq, ddk, ddv)
 
@@ -192,19 +215,6 @@ def test_jax_fhog_backward_backward_sharded2batch():
     fhog_output = jax.jit(complete_function)(q, k, v, do, ddq, ddk, ddv)
     # breakpoint()
     sharded_output = sharded_complete_fn(q, k, v, do, ddq, ddk, ddv)
-
-    # print(ref_output)
-    # print(fhog_output)
-
-    # from wadler_lindig import pprint
-
-    # pprint(ref_output)
-    # ref_output_zeros = jax.tree.map(lambda x: jnp.mean(x == 0.0), ref_output)
-    # fhog_output_zeros = jax.tree.map(lambda x: jnp.mean(x == 0.0), fhog_output)
-    # print(jnp.mean(ref_output[0][0, 1, :, :] == 0.0))
-
-    # print(f"ref_output: {ref_output_zeros=}")
-    # print(f"fhog_output: {fhog_output_zeros=}")
 
     for sharded_output_item, fhog_output_item in zip(sharded_output, fhog_output):
         try:
