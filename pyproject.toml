@@ -26,7 +26,7 @@ python-preference = "only-managed"
 required-environments = [
     "sys_platform == 'linux' and platform_machine == 'aarch64'", # Grace-Blackwell
     "sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "sys_platform == 'darwin'",
+    "sys_platform == 'darwin'",                                  # Allow installs on MacOS
 ]
 index-strategy = "unsafe-best-match"
 
