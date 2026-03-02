@@ -14,6 +14,8 @@ from jax._src.cudnn.fused_attention_stablehlo import MaskType
 from jax.extend import backend
 from jaxtyping import PyTree
 
+from flash_hog._utils.jax_utils import tree_rearrange
+
 # TODO: Implement autotuning using Tokamax
 
 
@@ -367,22 +369,16 @@ def flash_bwdbwd0(
             return jax.lax.fori_loop(0, group_size, inner_loop_body, carry)
 
         if mask_type == MaskType.CAUSAL:
-            start_masked_q_tile = (k_tile_index * config.tile_k + 1) // config.tile_q - 1
+            start_masked_q_tile = jnp.maximum((k_tile_index * config.tile_k + 1) // config.tile_q - 1, 0)
             end_masked_q_tile = pl.cdiv((k_tile_index + 1) * config.tile_k - 1, config.tile_q)
             num_required_q_tiles = pl.cdiv(n_queries, config.tile_q)
-            # dV2_j, dK2_j = jax.lax.fori_loop(
-            #     start_masked_q_tile,
-            #     end_masked_q_tile,
-            #     dk2_dv2_loop_body,
-            #     (jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32)),
-            # )
-            # dV2_j, dK2_j = jax.lax.fori_loop(end_masked_q_tile, num_required_q_tiles, partial(dk2_dv2_loop_body, causal_mask=True), (dV2_j, dK2_j))
             dV2_j, dK2_j = jax.lax.fori_loop(
-                0,
-                pl.cdiv(n_queries, config.tile_q),
+                start_masked_q_tile,
+                end_masked_q_tile,
                 partial(dk2_dv2_loop_body, causal_mask=True),
                 (jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32)),
             )
+            dV2_j, dK2_j = jax.lax.fori_loop(end_masked_q_tile, num_required_q_tiles, dk2_dv2_loop_body, (dV2_j, dK2_j))
         else:
             dV2_j, dK2_j = jax.lax.fori_loop(
                 0,
@@ -422,36 +418,3 @@ def flash_bwdbwd0(
     dQ2, ddO = tree_rearrange((dQ2, ddO), "... kv_heads group_size final_dim -> ... (kv_heads group_size) final_dim", group_size=group_size)
 
     return dQ2, dK2, dV2, ddO
-
-
-def tree_rearrange[T: PyTree](tree: T, pattern: str, **kwargs) -> T:
-    return jax.tree.map(partial(rearrange, pattern=pattern, **kwargs), tree)
-
-
-if __name__ == "__main__":
-    batch_size = 16
-    n_queries = 256
-    hidden_dim = 64
-    n_keys = 256
-    Q = jrandom.normal(jrandom.PRNGKey(0), (batch_size, n_queries, hidden_dim), dtype=jnp.bfloat16)
-    K = jrandom.normal(jrandom.PRNGKey(1), (batch_size, n_keys, hidden_dim), dtype=jnp.bfloat16)
-    V = jrandom.normal(jrandom.PRNGKey(2), (batch_size, n_keys, hidden_dim), dtype=jnp.bfloat16)
-    O = jrandom.normal(jrandom.PRNGKey(3), (batch_size, n_queries, hidden_dim), dtype=jnp.bfloat16)
-    dO = jrandom.normal(jrandom.PRNGKey(4), (batch_size, n_queries, hidden_dim), dtype=jnp.bfloat16)
-    ddQ = jrandom.normal(jrandom.PRNGKey(5), (batch_size, n_queries, hidden_dim), dtype=jnp.bfloat16)
-    ddK = jrandom.normal(jrandom.PRNGKey(6), (batch_size, n_keys, hidden_dim), dtype=jnp.bfloat16)
-    ddV = jrandom.normal(jrandom.PRNGKey(7), (batch_size, n_keys, hidden_dim), dtype=jnp.bfloat16)
-    L = jrandom.normal(jrandom.PRNGKey(8), (batch_size, n_queries))
-    scale = 1.0 / hidden_dim**0.5
-
-    config = TuningConfig(
-        tile_q=64,
-        # tile_m=64,
-        # tile_n=64,
-        tile_k=32,
-        max_concurrent_steps=4,
-    )
-    out = flash_bwdbwd(Q, K, V, O, dO, ddQ, ddK, ddV, L, scale, config)
-    print(out)
-    # out = jax.jit(partial(matmul6, config=config))(a, b)
-    # print(out)
