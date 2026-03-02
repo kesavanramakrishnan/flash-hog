@@ -180,7 +180,7 @@ def dot_product_attention_bwd_rule_bwd_rule(mask_type: MaskType, scale: float, r
         L=activation,
         mask_type=mask_type,
         scale=scale,
-        config=TuningConfig(tile_q=128, tile_k=32, max_concurrent_steps=4),
+        config=TuningConfig(tile_q=32, tile_k=32, max_concurrent_steps=4),
     )
     # Return gradients matching the structure of (res, g).
     # res = _make_bwd_residual(query, key, value, activation, out) — a 12-tuple.

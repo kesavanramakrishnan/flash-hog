@@ -47,6 +47,12 @@ def make_fhog_dpa_bwd(q, k, v, is_causal: bool, scale: float):
     return vjp_fun
 
 
+def full_use_fhog_bwd(q, k, v, do, is_causal: bool, scale: float):
+    fhog_bwd = make_fhog_dpa_bwd(q, k, v, is_causal, scale)
+    dQ, dK, dV = fhog_bwd(do)
+    return dQ, dK, dV
+
+
 def make_fhog_dpa_bwd_bwd(q, k, v, do, is_causal: bool, scale: float):
     def f(Q, K, V, dO):  # Returns dQ2, dK2, dV2, ddO
         vjp_fun = make_fhog_dpa_bwd(Q, K, V, is_causal, scale)
@@ -88,11 +94,13 @@ def test_jax_fhog_backward_single():
 
     ref_output = ref_dpa_bwd(do)
     fhog_output = fhog_bwd(do)
+    fhog_output_jit = jax.jit(full_use_fhog_bwd, static_argnums=(4, 5))(q, k, v, do, is_causal, scale)
 
     # print(ref_output)
     # print(fhog_output)
 
     chex.assert_trees_all_close(ref_output, fhog_output)
+    chex.assert_trees_all_close(ref_output, fhog_output_jit)
 
     # out = attn.dot_product_attention(q, k, v)
     # out, vjp_fun = jax.vjp(attn.dot_product_attention, q, k, v)
@@ -217,8 +225,11 @@ def test_jax_fhog_backward_backward_sharded2batch():
     # breakpoint()
     sharded_output = sharded_complete_fn(q, k, v, do, ddq, ddk, ddv)
 
+    any_failed = False
     for sharded_output_item, fhog_output_item in zip(sharded_output, fhog_output):
         try:
             chex.assert_trees_all_close(sharded_output_item, fhog_output_item, rtol=100, atol=0.04)
         except AssertionError as e:
+            any_failed = True
             print(e)
+    assert not any_failed, "Failed one or more tests"
