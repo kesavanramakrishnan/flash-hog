@@ -44,7 +44,7 @@ def maybe_causal_mask(A_ij, qi, kj, causal_mask):
 #     return
 
 
-def _flash_bwdbwd0(
+def flash_bwdbwd0(
     Q: Array,
     K: Array,
     V: Array,
@@ -83,6 +83,8 @@ def _flash_bwdbwd0(
     assert n_queries % config.tile_q == 0, f"{n_queries=} must be divisible by {config.tile_q=} for now"
     assert n_keys % config.tile_k == 0, f"{n_keys=} must be divisible by {config.tile_k=} for now"
     # Assert the remaining shapes are consistent
+    # if batch_size == 8:
+    #     breakpoint()
     assert K.shape == (batch_size, n_keys, kv_heads, hidden_dim)
     assert V.shape == (batch_size, n_keys, kv_heads, hidden_dim)
     assert O.shape == (batch_size, n_queries, q_heads, hidden_dim)
@@ -152,13 +154,13 @@ def _flash_bwdbwd0(
             ddK_j = ddK_ref[kslice, :]
             # ddV_j = ddV_ref[kslice, :]
 
-            S_ij = pl.dot(Q_i, K_j, trans_b=True) * scale
+            S_ij = pl.dot(Q_i, K_j.T) * scale
             S_ij = maybe_causal_mask(S_ij, q_indices, k_indices, causal_mask)
 
             P_ij = jnp.exp(S_ij - L_i[:, None])
 
             # dP_ij = pl.dot(dO_i, V_j.T)
-            ddS_ij = (pl.dot(ddQ_i, K_j, trans_b=True) + pl.dot(Q_i, ddK_j, trans_b=True)) * scale
+            ddS_ij = (pl.dot(ddQ_i, K_j.T) + pl.dot(Q_i, ddK_j.T)) * scale
             # ddS_ij = maybe_causal_mask(ddS_ij, q_indices, k_indices, causal_mask)
 
             dD_i = jnp.sum(ddS_ij * P_ij, axis=1)
@@ -194,15 +196,15 @@ def _flash_bwdbwd0(
             ddK_j = ddK_ref[kslice, :]
             ddV_j = ddV_ref[kslice, :]
 
-            S_ij = pl.dot(Q_i, K_j, trans_b=True) * scale
+            S_ij = pl.dot(Q_i, K_j.T) * scale
             S_ij = maybe_causal_mask(S_ij, q_indices, k_indices, causal_mask)
             P_ij = jnp.exp(S_ij - L_i[:, None])
 
-            dP_ij = pl.dot(dO_i, V_j, trans_b=True)
+            dP_ij = pl.dot(dO_i, V_j.T)
 
-            ddS_ij = (pl.dot(ddQ_i, K_j, trans_b=True) + pl.dot(Q_i, ddK_j, trans_b=True)) * scale
+            ddS_ij = (pl.dot(ddQ_i, K_j.T) + pl.dot(Q_i, ddK_j.T)) * scale
 
-            dP2_ij = pl.dot(dO_i, ddV_j, trans_b=True) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
+            dP2_ij = pl.dot(dO_i, ddV_j.T) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
             B_i = jnp.sum(dP2_ij * P_ij, axis=1)
             B_i_acc += B_i
 
@@ -231,15 +233,15 @@ def _flash_bwdbwd0(
             ddV_j = ddV_ref[kslice, :]
 
             # Compute attention scores
-            S_ij = pl.dot(Q_i, K_j, trans_b=True) * scale
+            S_ij = pl.dot(Q_i, K_j.T) * scale
             S_ij = maybe_causal_mask(S_ij, q_indices, k_indices, causal_mask)
             P_ij = jnp.exp(S_ij - L_i[:, None])
 
-            dP_ij = pl.dot(dO_i, V_j, trans_b=True)
+            dP_ij = pl.dot(dO_i, V_j.T)
 
-            ddS_ij = (pl.dot(ddQ_i, K_j, trans_b=True) + pl.dot(Q_i, ddK_j, trans_b=True)) * scale
+            ddS_ij = (pl.dot(ddQ_i, K_j.T) + pl.dot(Q_i, ddK_j.T)) * scale
 
-            dP2_ij = pl.dot(dO_i, ddV_j, trans_b=True) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
+            dP2_ij = pl.dot(dO_i, ddV_j.T) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
             dS2_ij = P_ij * (dP2_ij - B_i[:, None]) * scale
 
             dS_ij = scale * P_ij * (dP_ij - D_i[:, None])
@@ -326,52 +328,61 @@ def _flash_bwdbwd0(
         k_indices = k_tile_index * config.tile_k + jnp.arange(config.tile_k)
 
         def dk2_dv2_loop_body(qi, carry, causal_mask=False):
-            dV2_j_acc, dK2_j_acc = carry
-            qslice = pl.ds(qi * config.tile_q, config.tile_q)
-            q_indices = qi * config.tile_q + jnp.arange(config.tile_q)
+            def inner_loop_body(group_index, carry):
+                qslice = pl.ds(qi * config.tile_q, config.tile_q)
+                q_indices = qi * config.tile_q + jnp.arange(config.tile_q)
+                dV2_j_acc, dK2_j_acc = carry
 
-            Q_i = Q_ref[qslice, :]
-            L_i = L_ref[qslice]
-            dO_i = dO_ref[qslice, :]
-            ddQ_i = ddQ_ref[qslice, :]
-            dD_i = dD_ref[qslice]
-            B_i = B_ref[qslice]
-            D_i = D_ref[qslice]
-            dD_i = dD_ref[qslice]
+                Q_i = Q_ref[qslice, group_index, :]
+                L_i = L_ref[group_index, qslice]
+                dO_i = dO_ref[qslice, group_index, :]
+                ddQ_i = ddQ_ref[qslice, group_index, :]
+                dD_i = dD_ref[qslice, group_index]
+                B_i = B_ref[qslice, group_index]
+                D_i = D_ref[qslice, group_index]
+                dD_i = dD_ref[qslice, group_index]
 
-            S_ij = pl.dot(Q_i, K_j, trans_b=True) * scale
-            S_ij = maybe_causal_mask(S_ij, q_indices, k_indices, causal_mask)
-            P_ij = jnp.exp(S_ij - L_i[:, None])
+                S_ij = pl.dot(Q_i, K_j.T) * scale
+                S_ij = maybe_causal_mask(S_ij, q_indices, k_indices, causal_mask)
+                P_ij = jnp.exp(S_ij - L_i[:, None])
 
-            dP_ij = pl.dot(dO_i, V_j, trans_b=True)
+                dP_ij = pl.dot(dO_i, V_j.T)
 
-            ddS_ij = (pl.dot(ddQ_i, K_j, trans_b=True) + pl.dot(Q_i, ddK_j, trans_b=True)) * scale
+                ddS_ij = (pl.dot(ddQ_i, K_j.T) + pl.dot(Q_i, ddK_j.T)) * scale
 
-            dP2_ij = pl.dot(dO_i, ddV_j, trans_b=True) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
+                dP2_ij = pl.dot(dO_i, ddV_j.T) - dP_ij * dD_i[:, None] - ddS_ij * D_i[:, None] + dP_ij * ddS_ij
 
-            dS2_ij = P_ij * (dP2_ij - B_i[:, None]) * scale
+                dS2_ij = P_ij * (dP2_ij - B_i[:, None]) * scale
 
-            dS_ij = scale * P_ij * (dP_ij - D_i[:, None])
+                dS_ij = scale * P_ij * (dP_ij - D_i[:, None])
 
-            ddP_ij = P_ij * (ddS_ij - dD_i[:, None])
-            dV2_j_acc += pl.dot(ddP_ij.astype(dO_i.dtype), dO_i, trans_a=True)
+                ddP_ij = P_ij * (ddS_ij - dD_i[:, None])
+                dV2_j_acc += pl.dot(ddP_ij.astype(dO_i.dtype).T, dO_i)
 
-            dK2_j_acc += pl.dot(dS_ij.astype(ddQ_i.dtype), ddQ_i, trans_a=True)
-            dK2_j_acc += pl.dot(dS2_ij.astype(Q_i.dtype), Q_i, trans_a=True)
+                dK2_j_acc += pl.dot(dS_ij.astype(ddQ_i.dtype).T, ddQ_i)
+                dK2_j_acc += pl.dot(dS2_ij.astype(Q_i.dtype).T, Q_i)
 
-            return (dV2_j_acc, dK2_j_acc)
+                return (dV2_j_acc, dK2_j_acc)
+
+            return jax.lax.fori_loop(0, group_size, inner_loop_body, carry)
 
         if mask_type == MaskType.CAUSAL:
             start_masked_q_tile = (k_tile_index * config.tile_k + 1) // config.tile_q - 1
             end_masked_q_tile = pl.cdiv((k_tile_index + 1) * config.tile_k - 1, config.tile_q)
             num_required_q_tiles = pl.cdiv(n_queries, config.tile_q)
+            # dV2_j, dK2_j = jax.lax.fori_loop(
+            #     start_masked_q_tile,
+            #     end_masked_q_tile,
+            #     dk2_dv2_loop_body,
+            #     (jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32)),
+            # )
+            # dV2_j, dK2_j = jax.lax.fori_loop(end_masked_q_tile, num_required_q_tiles, partial(dk2_dv2_loop_body, causal_mask=True), (dV2_j, dK2_j))
             dV2_j, dK2_j = jax.lax.fori_loop(
-                start_masked_q_tile,
-                end_masked_q_tile,
-                dk2_dv2_loop_body,
+                0,
+                pl.cdiv(n_queries, config.tile_q),
+                partial(dk2_dv2_loop_body, causal_mask=True),
                 (jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32), jnp.zeros((config.tile_k, hidden_dim), dtype=jnp.float32)),
             )
-            dV2_j, dK2_j = jax.lax.fori_loop(end_masked_q_tile, num_required_q_tiles, partial(dk2_dv2_loop_body, causal_mask=True), (dV2_j, dK2_j))
         else:
             dV2_j, dK2_j = jax.lax.fori_loop(
                 0,
@@ -385,23 +396,23 @@ def _flash_bwdbwd0(
     bwd_bwd_stage2 = pl.pallas_call(
         bwd_bwd_kernel_stage2,
         out_shape=(dK2_shape_dtype, dV2_shape_dtype),
-        grid=(pl.cdiv(n_keys, config.tile_k), batch_size, q_heads),
+        grid=(pl.cdiv(n_keys, config.tile_k), batch_size, kv_heads),
         in_specs=[
-            pl.BlockSpec((None, n_queries, None, None, hidden_dim), lambda _k, b, h: (b, 0, h // group_size, h % group_size, 0)),  # Q
-            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h // group_size, 0)),  # K
-            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h // group_size, 0)),  # V
-            pl.BlockSpec((None, n_queries, None, None), lambda _k, b, h: (b, 0, h // group_size, h % group_size)),  # D
-            pl.BlockSpec((None, n_queries, None, None, hidden_dim), lambda _k, b, h: (b, 0, h // group_size, h % group_size, 0)),  # dO
-            pl.BlockSpec((None, n_queries, None, None, hidden_dim), lambda _k, b, h: (b, 0, h // group_size, h % group_size, 0)),  # ddQ
-            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h // group_size, 0)),  # ddK
-            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h // group_size, 0)),  # ddV
-            pl.BlockSpec((None, None, None, n_queries), lambda _k, b, h: (b, h // group_size, h % group_size, 0)),  # L (weird shape from cuDNN)
-            pl.BlockSpec((None, n_queries, None, None), lambda _k, b, h: (b, 0, h // group_size, h % group_size)),  # dD
-            pl.BlockSpec((None, n_queries, None, None), lambda _k, b, h: (b, 0, h // group_size, h % group_size)),  # B
+            pl.BlockSpec((None, n_queries, None, group_size, hidden_dim), lambda _k, b, h: (b, 0, h, 0, 0)),  # Q
+            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h, 0)),  # K
+            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h, 0)),  # V
+            pl.BlockSpec((None, n_queries, None, group_size), lambda _k, b, h: (b, 0, h, 0)),  # D
+            pl.BlockSpec((None, n_queries, None, group_size, hidden_dim), lambda _k, b, h: (b, 0, h, 0, 0)),  # dO
+            pl.BlockSpec((None, n_queries, None, group_size, hidden_dim), lambda _k, b, h: (b, 0, h, 0, 0)),  # ddQ
+            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h, 0)),  # ddK
+            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h, 0)),  # ddV
+            pl.BlockSpec((None, None, group_size, n_queries), lambda _k, b, h: (b, h, 0, 0)),  # L (weird shape from cuDNN)
+            pl.BlockSpec((None, n_queries, None, group_size), lambda _k, b, h: (b, 0, h, 0)),  # dD
+            pl.BlockSpec((None, n_queries, None, group_size), lambda _k, b, h: (b, 0, h, 0)),  # B
         ],
         out_specs=[
-            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h // group_size, 0)),  # dK2
-            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h // group_size, 0)),  # dV2
+            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h, 0)),  # dK2
+            pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h, 0)),  # dV2
         ],
         compiler_params=tlgpu.CompilerParams(num_stages=2, num_warps=4),
     )
