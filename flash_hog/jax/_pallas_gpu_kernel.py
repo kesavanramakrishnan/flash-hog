@@ -301,6 +301,7 @@ def flash_bwdbwd0(
             pl.BlockSpec((None, config.tile_q, None, None), lambda q, b, h: (b, q, h // group_size, h % group_size)),  # B
         ],
         compiler_params=tlgpu.CompilerParams(num_stages=2, num_warps=4),
+        name="hog_bwd_bwd_kernel_stage1",
     )
 
     dQ2, ddO, dD, B = bwd_bwd_stage1(Q, K, V, D, dO, ddQ, ddK, ddV, L)
@@ -411,6 +412,7 @@ def flash_bwdbwd0(
             pl.BlockSpec((None, config.tile_k, None, hidden_dim), lambda k, b, h: (b, k, h, 0)),  # dV2
         ],
         compiler_params=tlgpu.CompilerParams(num_stages=2, num_warps=4),
+        name="hog_bwd_bwd_kernel_stage2",
     )
 
     dK2, dV2 = bwd_bwd_stage2(Q, K, V, D, dO, ddQ, ddK, ddV, L, dD, B)
