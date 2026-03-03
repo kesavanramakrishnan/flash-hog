@@ -1,6 +1,6 @@
 [project]
 name = "flash-hog"
-version = "0.4.3"
+version = "0.4.5"
 description = "Kernels for higher order gradients of Flash Attention."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
@@ -41,6 +41,9 @@ line-length = 180
 ignore = ["F722"]
 
 extend-select = ["ARG005"]
+
+[tool.pytest.ini_options]
+addopts = "--pdbcls=IPython.terminal.debugger:TerminalPdb"
 
 [dependency-groups]
 dev = [
