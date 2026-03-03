@@ -11,6 +11,7 @@ from jax._src.cudnn.fused_attention_stablehlo import MaskType
 from jaxtyping import Bool, Float, Int
 
 import flash_hog.jax._attention_impl as attn_impl
+from flash_hog._utils.jax_utils import tree_rearrange
 
 # Reimplementation of much of jax._src.cudnn.fused_attention_stablehlo as used in jax.nn.dot_product_attention
 
@@ -35,7 +36,17 @@ def dot_product_attention(
     dtype = query.dtype
     assert dtype == key.dtype == value.dtype
     mask_type = MaskType.CAUSAL if is_causal else MaskType.NO_MASK
-    return _dot_product_attention(query, key, value, mask_type=mask_type, scale=scale)
+    unbatched = query.ndim == 3
+
+    if unbatched:
+        query, key, value = tree_rearrange((query, key, value), "T N H -> 1 T N H")
+
+    result = _dot_product_attention(query, key, value, mask_type=mask_type, scale=scale)
+
+    if unbatched:
+        result = tree_rearrange(result, "1 T N H -> T N H")
+
+    return result
 
 
 @partial(jax.custom_vjp, nondiff_argnames=["mask_type", "scale"])
@@ -49,13 +60,15 @@ def _dot_product_attention(
     return attn_impl.dot_product_attention_fwd(query, key, value, mask_type=mask_type, scale=scale)
 
 
-@partial(jax.custom_vjp, nondiff_argnames=["mask_type", "scale"])
+# @partial(jax.custom_vjp, nondiff_argnames=["mask_type", "scale"])
 def _dot_product_attention_fwd(query, key, value, mask_type: bool, scale: float):
     """
     Forward pass, saving for regular backward.
     """
     print("Running _dot_product_attention_fwd")
-    out, res = attn_impl.dot_product_attention_fwd_rule(query, key, value, mask_type=mask_type, scale=scale)
+
+    out, activation = attn_impl.cuda_dot_product_attention(query, key, value, mask_type=mask_type, scale=scale, return_residual=True)
+    res = (query, key, value, activation, out)
     return out, res
 
 
@@ -81,7 +94,7 @@ def _dot_product_attention_fwd_bwd(mask_type: bool, scale: float, res, g):
     return dQ + dQ2, dK + dK2, dV + dV2
 
 
-_dot_product_attention_fwd.defvjp(_dot_product_attention_fwd_fwd, _dot_product_attention_fwd_bwd)
+# _dot_product_attention_fwd.defvjp(_dot_product_attention_fwd_fwd, _dot_product_attention_fwd_bwd)
 
 
 @partial(jax.custom_vjp, nondiff_argnames=["mask_type", "scale"])

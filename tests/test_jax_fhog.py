@@ -77,10 +77,10 @@ def make_fhog_dpa_bwd_bwd(q, k, v, do, is_causal: bool, scale: float):
 
 def test_jax_fhog_backward_single():
     keys = jrandom.split(jrandom.PRNGKey(42), 10)
-    q = jrandom.normal(keys[0], (1, 128, 32, 64), dtype=jnp.bfloat16)
-    k = jrandom.normal(keys[1], (1, 128, 32, 64), dtype=jnp.bfloat16)
-    v = jrandom.normal(keys[2], (1, 128, 32, 64), dtype=jnp.bfloat16)
-    do = jrandom.normal(keys[3], (1, 128, 32, 64), dtype=jnp.bfloat16)
+    q = jrandom.normal(keys[0], (2, 128, 32, 64), dtype=jnp.bfloat16)
+    k = jrandom.normal(keys[1], (2, 128, 32, 64), dtype=jnp.bfloat16)
+    v = jrandom.normal(keys[2], (2, 128, 32, 64), dtype=jnp.bfloat16)
+    do = jrandom.normal(keys[3], (2, 128, 32, 64), dtype=jnp.bfloat16)
     # ddq = jrandom.normal(keys[4], (1, 128, 32, 64), dtype=jnp.bfloat16)
     # ddk = jrandom.normal(keys[5], (1, 128, 32, 64), dtype=jnp.bfloat16)
     # ddv = jrandom.normal(keys[6], (1, 128, 32, 64), dtype=jnp.bfloat16)
@@ -94,7 +94,8 @@ def test_jax_fhog_backward_single():
 
     ref_output = ref_dpa_bwd(do)
     fhog_output = fhog_bwd(do)
-    fhog_output_jit = jax.jit(full_use_fhog_bwd, static_argnums=(4, 5))(q, k, v, do, is_causal, scale)
+    fhog_output_jit = jax.jit(jax.vmap(partial(full_use_fhog_bwd, is_causal=is_causal, scale=scale)))(q, k, v, do)
+    # fhog_output_jit = jax.jit(partial(full_use_fhog_bwd, is_causal=is_causal, scale=scale))(q, k, v, do)
 
     # print(ref_output)
     # print(fhog_output)

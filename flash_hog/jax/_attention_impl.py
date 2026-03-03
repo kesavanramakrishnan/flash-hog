@@ -132,18 +132,20 @@ def dot_product_attention_bwd_rule(mask_type: MaskType, scale: float, res, g):
     """
     Backward pass, no saving.
     """
+    query, key, value, activation, out = res
+    cuda_res = _make_bwd_residual(query, key, value, activation, out)
     grads = _dot_product_attention_bwd_rule(
-        scale,
-        _SEED,
-        _DROPOUT_RATE,
-        _VARIADIC_ARGS,
-        mask_type,
-        _LAYOUT,
-        _SLIDING_WINDOW_LENGTH,
-        True,
-        False,
-        res,
-        g,
+        scale=scale,
+        seed=_SEED,
+        dropout_rate=_DROPOUT_RATE,
+        variadic_args=_VARIADIC_ARGS,
+        mask_type=mask_type,
+        layout=_LAYOUT,
+        sliding_window_length=_SLIDING_WINDOW_LENGTH,
+        is_training=None,
+        return_residual=False,
+        res=cuda_res,
+        grad_output=g,
     )
     return grads[0], grads[1], grads[2]
 
@@ -152,8 +154,9 @@ def dot_product_attention_bwd_rule_fwd_rule(mask_type: MaskType, scale: float, r
     """
     Backward pass, saving for higher order backward.
     """
-    query, key, value = res[0], res[1], res[2]
-    activation, out = res[10], res[11]
+    # query, key, value = res[0], res[1], res[2]
+    # activation, out = res[10], res[11]
+    query, key, value, activation, out = res
     dO = g
 
     dQ, dK, dV = dot_product_attention_bwd_rule(mask_type=mask_type, scale=scale, res=res, g=dO)
@@ -185,5 +188,5 @@ def dot_product_attention_bwd_rule_bwd_rule(mask_type: MaskType, scale: float, r
     # Return gradients matching the structure of (res, g).
     # res = _make_bwd_residual(query, key, value, activation, out) — a 12-tuple.
     # Gradients w.r.t. the unused placeholder fields and activation/out are None.
-    d_res = (dQ2, dK2, dV2, None, None, None, None, None, None, None, None, None)
+    d_res = (dQ2, dK2, dV2, None, None)
     return d_res, ddO
