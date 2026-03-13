@@ -34,6 +34,15 @@ def dot_product_attention(
         scale = query.shape[-1] ** -0.5
     dtype = query.dtype
     assert dtype == key.dtype == value.dtype
+    if dtype == jnp.float32:
+        return jax.nn.dot_product_attention(
+            query,
+            key,
+            value,
+            is_causal=is_causal,
+            scale=scale,
+            implementation="xla",
+        )
     mask_type = MaskType.CAUSAL if is_causal else MaskType.NO_MASK
     return _dot_product_attention(query, key, value, mask_type=mask_type, scale=scale)
 
@@ -50,7 +59,7 @@ def _dot_product_attention(
 
 
 @partial(jax.custom_vjp, nondiff_argnames=["mask_type", "scale"])
-def _dot_product_attention_fwd(query, key, value, mask_type: bool, scale: float):
+def _dot_product_attention_fwd(query, key, value, mask_type: MaskType, scale: float):
     """
     Forward pass, saving for regular backward.
     """
@@ -59,7 +68,7 @@ def _dot_product_attention_fwd(query, key, value, mask_type: bool, scale: float)
     return out, res
 
 
-def _dot_product_attention_fwd_fwd(query, key, value, mask_type: bool, scale: float):
+def _dot_product_attention_fwd_fwd(query, key, value, mask_type: MaskType, scale: float):
     """
     Run the forward pass, saving in expectation of a regular backward pass and a higher order backward pass.
     """
@@ -68,7 +77,7 @@ def _dot_product_attention_fwd_fwd(query, key, value, mask_type: bool, scale: fl
     return (out, res), res
 
 
-def _dot_product_attention_fwd_bwd(mask_type: bool, scale: float, res, g):
+def _dot_product_attention_fwd_bwd(mask_type: MaskType, scale: float, res, g):
     """
     Backward through the saving forward pass.
     """
