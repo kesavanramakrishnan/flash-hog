@@ -55,9 +55,7 @@ def _softmax(x, axis: int | tuple[int, ...] | None = -1, where=None, initial=-jn
     x_max = jnp.max(x, axis, where=where, initial=initial, keepdims=True)
     x_safe = x if where is None else jnp.where(where, x, initial)
     unnormalized = jnp.exp(x_safe - x_max)
-    result = unnormalized / jnp.sum(
-        unnormalized, axis, where=where, keepdims=True, dtype=jnp.float32
-    ).astype(x.dtype)
+    result = unnormalized / jnp.sum(unnormalized, axis, where=where, keepdims=True, dtype=jnp.float32).astype(x.dtype)
     if where is not None:
         result = jnp.where(where, result, 0)
     return result
@@ -78,9 +76,7 @@ def _softmax_jvp(axis, primals, tangents):
     (x, where, initial), (x_dot, _, _) = primals, tangents
     y = _softmax(x, axis, where, initial)
     x_dot = checkpoint_name(x_dot, "x_dot")
-    return y, y * (
-        x_dot - jnp.sum(y * x_dot, axis, where=where, keepdims=True, dtype=jnp.float32)
-    ).astype(x_dot.dtype)
+    return y, y * (x_dot - jnp.sum(y * x_dot, axis, where=where, keepdims=True, dtype=jnp.float32)).astype(x_dot.dtype)
 
 
 def get_mask_bottom_right(qs: int, ks: int, sliding_window_length: int):
@@ -229,19 +225,12 @@ def attn_bwd_bwd(
     return dq2, dk2, dv2, ddo
 
 
-def precompute_values(
-    stats, q, k, v, o, do, ddq, ddk, ddv, scale, is_causal, sliding_window_length
-):
+def precompute_values(stats, q, k, v, o, do, ddq, ddk, ddv, scale, is_causal, sliding_window_length):
     precision = jax.lax.DotAlgorithmPreset.BF16_BF16_F32
     einsum = partial(jnp.einsum, precision=precision)
     d = einsum("qd,qd->q", o, do)[:, None]
 
-    s = (
-        jnp.einsum(
-            "qd,kd->qk", q, k, precision=precision, preferred_element_type=jnp.float32
-        )
-        * scale
-    )
+    s = jnp.einsum("qd,kd->qk", q, k, precision=precision, preferred_element_type=jnp.float32) * scale
 
     if is_causal:
         qs, ks = q.shape[0], k.shape[0]
@@ -285,12 +274,7 @@ def attn_bwd_bwd_stats(
     # )
     # d = dd = stats2 = 1
 
-    s = (
-        jnp.einsum(
-            "qd,kd->qk", q, k, precision=precision, preferred_element_type=jnp.float32
-        )
-        * scale
-    )
+    s = jnp.einsum("qd,kd->qk", q, k, precision=precision, preferred_element_type=jnp.float32) * scale
 
     if is_causal:
         qs, ks = q.shape[0], k.shape[0]
@@ -392,9 +376,7 @@ if __name__ == "__main__":
     out, fwd_vjp = jax.vjp(
         jax.remat(
             partial(attn_fwd, scale=scale),
-            policy=jax.checkpoint_policies.save_only_these_names(
-                "q", "k", "v", "denom"
-            ),
+            policy=jax.checkpoint_policies.save_only_these_names("q", "k", "v", "denom"),
         ),
         q,
         k,
@@ -433,10 +415,6 @@ if __name__ == "__main__":
 
     s = q @ k.T
     ds = q @ k.T
-    jaxpr_graph(
-        partial(_softmax_jvp, -1), (s, None, -jnp.inf), (ds, None, None)
-    ).render(filename="softmax_jvp")
-    _out, softmax_vjp_fun = jax.vjp(
-        partial(_softmax, axis=-1, where=None, initial=-jnp.inf), s
-    )
+    jaxpr_graph(partial(_softmax_jvp, -1), (s, None, -jnp.inf), (ds, None, None)).render(filename="softmax_jvp")
+    _out, softmax_vjp_fun = jax.vjp(partial(_softmax, axis=-1, where=None, initial=-jnp.inf), s)
     jaxpr_graph(softmax_vjp_fun, ds).render(filename="softmax_vjp")

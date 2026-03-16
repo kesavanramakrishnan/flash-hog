@@ -91,24 +91,12 @@ def flash_fwd_kernel(
 
 
 @triton.jit
-def flash_bwd_delta_kernel(
-    O, dO, D, seq_len, block_size: tl.constexpr, head_dim: tl.constexpr
-):
+def flash_bwd_delta_kernel(O, dO, D, seq_len, block_size: tl.constexpr, head_dim: tl.constexpr):
     seq_idx = tl.program_id(0) * block_size + tl.arange(0, block_size)
     batch_head_idx = tl.program_id(1)
     oemb_idx = tl.arange(0, head_dim)
-    O = tl.load(
-        O
-        + batch_head_idx * head_dim * seq_len
-        + seq_idx[:, None] * head_dim
-        + oemb_idx[None, :]
-    )
-    dO = tl.load(
-        dO
-        + batch_head_idx * head_dim * seq_len
-        + seq_idx[:, None] * head_dim
-        + oemb_idx[None, :]
-    ).to(tl.float32)
+    O = tl.load(O + batch_head_idx * head_dim * seq_len + seq_idx[:, None] * head_dim + oemb_idx[None, :])
+    dO = tl.load(dO + batch_head_idx * head_dim * seq_len + seq_idx[:, None] * head_dim + oemb_idx[None, :]).to(tl.float32)
     delta_vals = tl.sum(O * dO, axis=1)
     tl.store(D + batch_head_idx * seq_len + seq_idx, delta_vals)
 
@@ -231,9 +219,7 @@ def flash_bwd_kernel(
 ):
     head_idx = tl.program_id(2)
     logit_offset = (head_idx * seq_len).to(tl.int64)
-    memory_offset = (
-        stride_h * (head_idx % n_head) + stride_z * (head_idx // n_head)
-    ).to(tl.int64)
+    memory_offset = (stride_h * (head_idx % n_head) + stride_z * (head_idx // n_head)).to(tl.int64)
     blk_tile_idx = tl.program_id(0)
 
     Q += memory_offset
@@ -315,9 +301,7 @@ def flash_bwd_kernel(
     mask_block_cols: tl.constexpr = block_size // 2
     seq_row_idx = start_blk_idx + tl.arange(0, block_size)
 
-    q_blk = tl.load(
-        Q + seq_row_idx[:, None] * stride_tok + feat_idx[None, :] * stride_d
-    )
+    q_blk = tl.load(Q + seq_row_idx[:, None] * stride_tok + feat_idx[None, :] * stride_d)
     dq = tl.zeros([block_size, head_dim], dtype=tl.float32)
     do = tl.load(dO + seq_row_idx[:, None] * stride_tok + feat_idx[None, :] * stride_d)
 
@@ -374,9 +358,7 @@ class FlashAttention2(torch.autograd.Function):
     def forward(ctx, Q, K, V, causal):
         O = torch.empty_like(Q)
 
-        L = torch.empty(
-            (Q.shape[0], Q.shape[1], Q.shape[2]), device=Q.device, dtype=torch.float32
-        )
+        L = torch.empty((Q.shape[0], Q.shape[1], Q.shape[2]), device=Q.device, dtype=torch.float32)
 
         Y_DIM = N_HEAD * SEQ_LEN
         block_size = 64
@@ -502,9 +484,7 @@ def verify_similarity_to_torch_sdpa():
     dq_triton, dk_triton, dv_triton = q.grad, k.grad, v.grad
 
     q, k, v = get_data()
-    o_torch = torch.nn.functional.scaled_dot_product_attention(
-        q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True
-    )
+    o_torch = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True)
     o_torch.sum().backward()
     dq_torch, dk_torch, dv_torch = q.grad, k.grad, v.grad
 
@@ -522,9 +502,7 @@ def verify_similarity_to_torch_sdpa():
     print(f"{dv_diff=}")
     torch.testing.assert_close(o_triton, o_torch, atol=4e-3, rtol=1e-3)
 
-    print(
-        "✅ Verification successful: Triton kernel and torch sdpa same output and gradients"
-    )
+    print("✅ Verification successful: Triton kernel and torch sdpa same output and gradients")
 
 
 def store():
@@ -558,9 +536,7 @@ def verify():
     assert_same(o, "o")
 
     def assert_close(current, key):
-        assert torch.allclose(
-            current.detach().cpu(), data[key], atol=1e-3, rtol=1e-4
-        ), f"Mismatch {key}"
+        assert torch.allclose(current.detach().cpu(), data[key], atol=1e-3, rtol=1e-4), f"Mismatch {key}"
 
     assert_close(q.grad, "dq")
     assert_close(k.grad, "dk")
@@ -568,9 +544,7 @@ def verify():
     #  assert_same(q.grad, "dq")
     #  assert_same(k.grad, "dk")
     #  assert_same(v.grad, "dv")
-    print(
-        "✅ Verification successful: Triton kernel and torch sdpa same output and gradients"
-    )
+    print("✅ Verification successful: Triton kernel and torch sdpa same output and gradients")
 
 
 def benchh():

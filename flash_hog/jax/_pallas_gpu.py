@@ -4,17 +4,32 @@ import chex
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-from jax.experimental.custom_partitioning import BATCHING, SdyShardingRule, custom_partitioning
+from flash_hog._utils.jax_utils import tree_rearrange
+from flash_hog.jax._pallas_gpu_kernel import MaskType, TuningConfig, flash_bwdbwd0
+from jax.experimental.custom_partitioning import (
+    BATCHING,
+    SdyShardingRule,
+    custom_partitioning,
+)
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
-from flash_hog._utils.jax_utils import tree_rearrange
-from flash_hog.jax._pallas_gpu_kernel import MaskType, TuningConfig, flash_bwdbwd0
 
-
-def partition_flash_bwdbwd(mesh, arg_shapes, result_shape, mask_type: MaskType, scale: float | None, config: TuningConfig):
+def partition_flash_bwdbwd(
+    mesh,
+    arg_shapes,
+    result_shape,
+    mask_type: MaskType,
+    scale: float | None,
+    config: TuningConfig,
+):
     arg_shardings = jax.tree.map(lambda s: s.sharding, arg_shapes)
     result_sharding = jax.tree.map(lambda s: s.sharding, result_shape)
+
+    # breakpoint()
+
+    # print(f"arg_shardings: {arg_shardings}")
+    # print(f"result_sharding: {result_sharding}")
 
     # rank = len(arg_shapes[0].shape)
     # print(f"arg_shardings: {arg_shardings}")
@@ -29,23 +44,42 @@ def partition_flash_bwdbwd(mesh, arg_shapes, result_shape, mask_type: MaskType, 
     return mesh, lower_fn, result_sharding, arg_shardings
 
 
-def flash_bwdbwd(Q, K, V, O, dO, ddQ, ddK, ddV, L, mask_type: MaskType, scale: float | None, config: TuningConfig):
+BATCHING = "..."
+
+
+def flash_bwdbwd(
+    Q,
+    K,
+    V,
+    O,
+    dO,
+    ddQ,
+    ddK,
+    ddV,
+    L,
+    mask_type: MaskType,
+    scale: float | None,
+    config: TuningConfig,
+):
     if Q.ndim == 3:  # Add a batch dimension to the input arguments if there is none coming in
         batched_args = tree_rearrange((Q, K, V, O, dO, ddQ, ddK, ddV, L), " ... -> 1 ...")
         result_batched = flash_bwdbwd(*batched_args, mask_type=mask_type, scale=scale, config=config)
         return tree_rearrange(result_batched, "1 ... -> ...")
 
-    def flash_fn(*args):  # Partialed to include the kwargs, but compatible with custom_partitioning
+    def flash_fn(
+        *args,
+    ):  # Partialed to include the kwargs, but compatible with custom_partitioning
         return flash_bwdbwd0(*args, mask_type=mask_type, scale=scale, config=config)
 
-    f_partitioned = custom_partitioning(flash_fn)
-    f_partitioned.def_partition(
-        infer_sharding_from_operands=None, propagate_user_sharding=None, # GSPMD options, not needed
-        partition=partial(partition_flash_bwdbwd, mask_type=mask_type, scale=scale, config=config),
-        #                             Q                              K                               V                                O                                dO                             ddQ                            ddK                               ddV                       L                           dQ2                          dK2                          dV2                          ddO
-        sharding_rule='... queries q_heads hidden_qk, ... keys_vals kv_heads hidden_qk, ... keys_vals kv_heads hidden_v, ... queries q_heads hidden_v, ... queries q_heads hidden_v, ... queries q_heads hidden_qk, ... keys_vals kv_heads hidden_qk, ... keys_vals kv_heads hidden_v, ... q_heads queries -> ... queries q_heads hidden_qk, ... keys_vals kv_heads hidden_qk, ... keys_vals kv_heads hidden_v, ... queries q_heads hidden_v',  
-        # need_replication_factors=("queries", 'q_heads', 'hidden_qk', 'keys_vals', 'kv_heads', 'hidden_v')
-    )  # fmt: skip
+    # f_partitioned = custom_partitioning(flash_fn)
+    # f_partitioned.def_partition(
+    #     infer_sharding_from_operands=None, propagate_user_sharding=None, # GSPMD options, not needed
+    #     partition=partial(partition_flash_bwdbwd, mask_type=mask_type, scale=scale, config=config),
+    #     #                             Q                                  K                                 V                               O                                 dO                             ddQ                               ddK                              ddV                                 L      ->              dQ2                                dK2                                 dV2                           ddO
+    #     sharding_rule='batch queries q_heads hidden_qk,  batch key_vals kv_heads hidden_qk, batch key_vals kv_heads hidden_v, batch queries q_heads hidden_v, batch queries q_heads hidden_v, batch queries q_heads hidden_qk, batch key_vals kv_heads hidden_qk, batch key_vals kv_heads hidden_v, batch queries q_heads -> batch queries q_heads hidden_qk, batch keys_vals kv_heads hidden_qk, batch keys_vals kv_heads hidden_v, batch queries q_heads hidden_v',
+    #     # need_replication_factors=("queries", 'q_heads', 'hidden_qk', 'keys_vals', 'kv_heads', 'hidden_v')
+    # )  # fmt: skip
+    f_partitioned = flash_fn
 
     f_batched = jax.custom_batching.custom_vmap(f_partitioned)
 
@@ -58,7 +92,11 @@ def flash_bwdbwd(Q, K, V, O, dO, ddQ, ddK, ddV, L, mask_type: MaskType, scale: f
         result = f_batched(*batched_args)
 
         # Unroll the batch dimensions back out to get the intended shape
-        result_unrolled = tree_rearrange(result, "(new_batch old_batch) ... -> new_batch old_batch ...", new_batch=axis_size)
+        result_unrolled = tree_rearrange(
+            result,
+            "(new_batch old_batch) ... -> new_batch old_batch ...",
+            new_batch=axis_size,
+        )
         out_batched = jax.tree.map(lambda _: True, result_unrolled)
         return result_unrolled, out_batched
 

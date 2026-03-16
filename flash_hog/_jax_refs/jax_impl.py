@@ -16,9 +16,7 @@ from jax.interpreters.partial_eval import dce_jaxpr
 
 def name_jvp(primals, tangents, *, name):
     (x,), (xdot,) = primals, tangents
-    return name_p.bind(x, name=name), name_p.bind(
-        xdot, name=f"d{name}"
-    )  # name the tangent value!
+    return name_p.bind(x, name=name), name_p.bind(xdot, name=f"d{name}")  # name the tangent value!
 
 
 def name_transpose(cotangent, *_args, name, **_kwargs):
@@ -79,9 +77,7 @@ def _softmax(x, axis: int | tuple[int, ...] | None = -1, where=None, initial=-jn
     x_max = jnp.max(x, axis, where=where, initial=initial, keepdims=True)
     x_safe = x if where is None else jnp.where(where, x, initial)
     unnormalized = jnp.exp(x_safe - x_max)
-    result = unnormalized / jnp.sum(
-        unnormalized, axis, where=where, keepdims=True, dtype=jnp.float32
-    ).astype(x.dtype)
+    result = unnormalized / jnp.sum(unnormalized, axis, where=where, keepdims=True, dtype=jnp.float32).astype(x.dtype)
     if where is not None:
         result = jnp.where(where, result, 0)
     return result
@@ -102,9 +98,7 @@ def _softmax_jvp(axis, primals, tangents):
     (x, where, initial), (x_dot, _, _) = primals, tangents
     y = _softmax(x, axis, where, initial)
     x_dot = checkpoint_name(x_dot, "x_dot")
-    return y, y * (
-        x_dot - jnp.sum(y * x_dot, axis, where=where, keepdims=True, dtype=jnp.float32)
-    ).astype(x_dot.dtype)
+    return y, y * (x_dot - jnp.sum(y * x_dot, axis, where=where, keepdims=True, dtype=jnp.float32)).astype(x_dot.dtype)
 
 
 def get_mask_bottom_right(qs: int, ks: int, sliding_window_length: int):
@@ -253,19 +247,12 @@ def attn_bwd_bwd(
     return dq2, dk2, dv2, ddo
 
 
-def precompute_values(
-    stats, q, k, v, o, do, ddq, ddk, ddv, scale, is_causal, sliding_window_length
-):
+def precompute_values(stats, q, k, v, o, do, ddq, ddk, ddv, scale, is_causal, sliding_window_length):
     precision = jax.lax.DotAlgorithmPreset.BF16_BF16_F32
     einsum = partial(jnp.einsum, precision=precision)
     d = einsum("qd,qd->q", o, do)[:, None]
 
-    s = (
-        jnp.einsum(
-            "qd,kd->qk", q, k, precision=precision, preferred_element_type=jnp.float32
-        )
-        * scale
-    )
+    s = jnp.einsum("qd,kd->qk", q, k, precision=precision, preferred_element_type=jnp.float32) * scale
 
     if is_causal:
         qs, ks = q.shape[0], k.shape[0]
@@ -311,12 +298,7 @@ def attn_bwd_bwd_stats(
     # )
     # d = dd = stats2 = 1
 
-    s = (
-        jnp.einsum(
-            "qd,kd->qk", q, k, precision=precision, preferred_element_type=jnp.float32
-        )
-        * scale
-    )
+    s = jnp.einsum("qd,kd->qk", q, k, precision=precision, preferred_element_type=jnp.float32) * scale
 
     if is_causal:
         qs, ks = q.shape[0], k.shape[0]
@@ -435,21 +417,11 @@ def scuffed_save_bwd_bwd(forward_fn, backward_fn, inp, **settings):
     _O = P @ v
     L = jax.nn.logsumexp(S, axis=-1)
 
-    torch.save(
-        torch.from_numpy(np.asarray(q, dtype=np.float32)), input_tensors_path / "q.pt"
-    )
-    torch.save(
-        torch.from_numpy(np.asarray(k, dtype=np.float32)), input_tensors_path / "k.pt"
-    )
-    torch.save(
-        torch.from_numpy(np.asarray(v, dtype=np.float32)), input_tensors_path / "v.pt"
-    )
-    torch.save(
-        torch.from_numpy(np.asarray(_O, dtype=np.float32)), input_tensors_path / "o.pt"
-    )
-    torch.save(
-        torch.from_numpy(np.asarray(do, dtype=np.float32)), input_tensors_path / "do.pt"
-    )
+    torch.save(torch.from_numpy(np.asarray(q, dtype=np.float32)), input_tensors_path / "q.pt")
+    torch.save(torch.from_numpy(np.asarray(k, dtype=np.float32)), input_tensors_path / "k.pt")
+    torch.save(torch.from_numpy(np.asarray(v, dtype=np.float32)), input_tensors_path / "v.pt")
+    torch.save(torch.from_numpy(np.asarray(_O, dtype=np.float32)), input_tensors_path / "o.pt")
+    torch.save(torch.from_numpy(np.asarray(do, dtype=np.float32)), input_tensors_path / "do.pt")
     torch.save(
         torch.from_numpy(np.asarray(ddq, dtype=np.float32)),
         input_tensors_path / "ddq.pt",
@@ -533,9 +505,7 @@ def bwdbwd_from_vjp(
     return dq2, dk2, dv2, ddo
 
 
-def compare_bwdbwd_and_bwdbwdstats(
-    forward_fn, backward_fn_non_stats, backward_fn_stats, inp, **settings
-):
+def compare_bwdbwd_and_bwdbwdstats(forward_fn, backward_fn_non_stats, backward_fn_stats, inp, **settings):
     random_input = random_like_tree(inp, jrandom.PRNGKey(0))
 
     forward_out, auto_vjp = jax.vjp(partial(forward_fn, **settings), *random_input)
@@ -625,12 +595,8 @@ if __name__ == "__main__":
     # print(get_mask_bottom_right(10, 20, 5).astype(jnp.int32))
 
     test_data_folder = Path("test_data")
-    (input_tensors_path := test_data_folder / "input_items").mkdir(
-        parents=True, exist_ok=True
-    )
-    (output_tensors_path := test_data_folder / "output_items").mkdir(
-        parents=True, exist_ok=True
-    )
+    (input_tensors_path := test_data_folder / "input_items").mkdir(parents=True, exist_ok=True)
+    (output_tensors_path := test_data_folder / "output_items").mkdir(parents=True, exist_ok=True)
 
     key1, key2, key3 = jrandom.split(jrandom.PRNGKey(42), 3)
     nq = 128
@@ -647,9 +613,7 @@ if __name__ == "__main__":
     out, fwd_vjp = jax.vjp(
         jax.remat(
             partial(attn_fwd, scale=scale),
-            policy=jax.checkpoint_policies.save_only_these_names(
-                "q", "k", "v", "denom"
-            ),
+            policy=jax.checkpoint_policies.save_only_these_names("q", "k", "v", "denom"),
         ),
         q,
         k,

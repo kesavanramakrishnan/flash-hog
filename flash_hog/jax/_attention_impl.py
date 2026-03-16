@@ -107,7 +107,20 @@ def _make_bwd_residual(query, key, value, activation, out):
     Unused optional fields are filled with empty arrays.
     """
     _not_used = jnp.zeros(0, dtype=query.dtype)
-    return (query, key, value, _not_used, _not_used, _not_used, _not_used, _not_used, _not_used, _not_used, activation, out)
+    return (
+        query,
+        key,
+        value,
+        _not_used,
+        _not_used,
+        _not_used,
+        _not_used,
+        _not_used,
+        _not_used,
+        _not_used,
+        activation,
+        out,
+    )
 
 
 def dot_product_attention_fwd(query, key, value, mask_type: MaskType, scale: float):
@@ -190,3 +203,7 @@ def dot_product_attention_bwd_rule_bwd_rule(mask_type: MaskType, scale: float, r
     # Gradients w.r.t. the unused placeholder fields and activation/out are None.
     d_res = (dQ2, dK2, dV2, None, None)
     return d_res, ddO
+
+    # Dummy return for debugging
+    # d_res = (query, key, value, None, None)
+    # return d_res, dO

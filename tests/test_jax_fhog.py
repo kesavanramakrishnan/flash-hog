@@ -5,7 +5,7 @@ import chex
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-from jax.sharding import Mesh, NamedSharding
+from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
 import flash_hog.jax.attention as attn
@@ -211,7 +211,8 @@ def test_jax_fhog_backward_backward_sharded2batch():
     is_causal = True
     scale = 1.0 / sqrt(q.shape[-1])
 
-    mesh2 = Mesh(jax.devices("gpu")[:2], ("x",))
+    mesh2 = Mesh(jax.devices("gpu")[:2], ("x",), axis_types=(AxisType.Explicit,))
+    print(mesh2)
 
     spec = NamedSharding(mesh2, P("x", None, None, None))
 
