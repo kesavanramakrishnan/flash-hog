@@ -4,8 +4,6 @@ import chex
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-from flash_hog._utils.jax_utils import tree_rearrange
-from flash_hog.jax._pallas_gpu_kernel import MaskType, TuningConfig, flash_bwdbwd0
 from jax.experimental.custom_partitioning import (
     BATCHING,
     SdyShardingRule,
@@ -13,6 +11,9 @@ from jax.experimental.custom_partitioning import (
 )
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
+
+from flash_hog._utils.jax_utils import tree_rearrange
+from flash_hog.jax._pallas_gpu_kernel import MaskType, TuningConfig, flash_bwdbwd0
 
 
 def partition_flash_bwdbwd(
