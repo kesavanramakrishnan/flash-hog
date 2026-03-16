@@ -6,11 +6,18 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+from jax._src import core
 from jax._src.cudnn.fused_attention_stablehlo import (
     AttentionLayout,
     MaskType,
     _dot_product_attention_bwd_lower,
+    _dot_product_attention_bwd_p,
+    _dot_product_attention_bwd_p_wrapper,
     _dot_product_attention_bwd_rule,
+    _dot_product_attention_fwd_p,
+    _dot_product_attention_fwd_p_wrapper,
+    get_max_seg_per_batch,
 )
 from jax._src.cudnn.fused_attention_stablehlo import (
     dot_product_attention as cuda_dot_product_attention,
@@ -31,9 +38,70 @@ from flash_hog.jax._pallas_gpu import TuningConfig, flash_bwdbwd
 # The fix below replaces the sharding rule with one that uses *shared* factor
 # names so Shardy propagates sharding consistently across all operands.
 # ---------------------------------------------------------------------------
+# def _fixed_dot_product_attention_bwd_shardy_rule(
+#     scale,
+#     seed,
+#     dropout_rate,
+#     variadic_args,
+#     mask_type,
+#     layout,
+#     sliding_window_length,
+#     mesh,
+#     value_types,
+#     result_types,
+# ):
+#     _, has_dbias = variadic_args
+#     num_args = len(value_types)
+#     if layout == AttentionLayout.BTNH.value:
+#         q_map = ArrayMapping("batch", "qseq", "qheads", "head")
+#         k_map = ArrayMapping("batch", "kvseq", "kvheads", "head")
+#         v_map = ArrayMapping("batch", "kvseq", "kvheads", "vhead")
+#         act_map = ArrayMapping("batch", "qheads", "qseq")
+#         out_map = ArrayMapping("batch", "qseq", "qheads", "vhead")
+#         grd_map = ArrayMapping("batch", "qseq", "qheads", "vhead")
+#     elif layout == AttentionLayout.BNTH.value:
+#         q_map = ArrayMapping("batch", "qheads", "qseq", "head")
+#         k_map = ArrayMapping("batch", "kvheads", "kvseq", "head")
+#         v_map = ArrayMapping("batch", "kvheads", "kvseq", "vhead")
+#         act_map = ArrayMapping("batch", "qheads", "qseq")
+#         out_map = ArrayMapping("batch", "qheads", "qseq", "vhead")
+#         grd_map = ArrayMapping("batch", "qheads", "qseq", "vhead")
+#     else:
+#         # Unknown layout – fall back to the (broken) original behaviour so we
+#         # don't silently produce wrong sharding for untested layouts.
+#         from jax._src.cudnn.fused_attention_stablehlo import _bwd_shardy_rule
+#         return _bwd_shardy_rule(num_args, has_dbias, is_fp8=False)
+#     # Dynamic args order (static args are already stripped by custom_partitioning):
+#     #   0: query, 1: key, 2: value,
+#     #   3: bias, 4: q_seqlen, 5: kv_seqlen, 6: q_offsets, 7: kv_offsets,
+#     #   8: page_table_k, 9: page_table_v,
+#     #   10: activation, 11: fwd_output, 12: grad_output
+#     input_sharding = [q_map, k_map, v_map]
+#     num_unused = num_args - 6  # everything except Q,K,V, act, out, grad
+#     for i in range(num_unused):
+#         input_sharding.append(ArrayMapping(f"unused{i}"))
+#     input_sharding.extend([act_map, out_map, grd_map])
+#     output_sharding = (q_map, k_map, v_map)
+#     if has_dbias:
+#         # dBias has the same mapping as the bias input (index 3), but bias is
+#         # unused in our case so we just give it its own independent name.
+#         output_sharding = output_sharding + (ArrayMapping("dbias"),)
+#     return SdyShardingRule(tuple(input_sharding), output_sharding)
+# _dot_product_attention_bwd_lower.sharding_rule = _fixed_dot_product_attention_bwd_shardy_rule
 
 
-def _fixed_dot_product_attention_bwd_shardy_rule(
+def _dot_product_attention_fwd_abstract(
+    query,
+    key,
+    value,
+    bias,
+    q_seqlen,
+    kv_seqlen,
+    q_offsets,
+    kv_offsets,
+    page_table_k,
+    page_table_v,
+    *,
     scale,
     seed,
     dropout_rate,
@@ -41,55 +109,85 @@ def _fixed_dot_product_attention_bwd_shardy_rule(
     mask_type,
     layout,
     sliding_window_length,
-    mesh,
-    value_types,
-    result_types,
+    is_training,
+):
+    if layout == AttentionLayout.BNTH.value:
+        B, N, T, _ = query.shape
+        _, _, S, H = value.shape
+        output_shape = (B, N, T, H)
+    else:
+        B, T, N, _ = query.shape
+        _, S, _, H = value.shape
+        output_shape = (B, T, N, H)
+
+    max_seg_per_batch = get_max_seg_per_batch(q_offsets)
+    softmax_stat_shape = (B * max_seg_per_batch, N, T)
+
+    vma = query.vma | key.vma | value.vma
+
+    output_sharding = query.sharding
+
+    if is_training:
+        softmax_stat_sharding = jax.NamedSharding(mesh=query.sharding.mesh, spec=jax.P(*output_sharding.spec[:-1]))
+        return (
+            core.ShapedArray(output_shape, query.dtype, sharding=output_sharding, vma=vma),  # output
+            core.ShapedArray(softmax_stat_shape, np.float32, sharding=softmax_stat_sharding, vma=vma),  # softmax_stat
+        )
+    else:
+        return (
+            core.ShapedArray(output_shape, query.dtype, sharding=output_sharding, vma=vma),  # output
+        )
+
+
+_dot_product_attention_fwd_p.def_abstract_eval(_dot_product_attention_fwd_abstract)
+_dot_product_attention_fwd_p_wrapper.def_abstract_eval(_dot_product_attention_fwd_abstract)
+
+
+def _dot_product_attention_bwd_abstract(
+    query,
+    key,
+    value,
+    bias,
+    q_seqlen,
+    kv_seqlen,
+    q_offsets,
+    kv_offsets,
+    page_table_k,
+    page_table_v,
+    activation,
+    fwd_output,
+    grad_output,
+    *,
+    scale,
+    seed,
+    dropout_rate,
+    variadic_args,
+    mask_type,
+    layout,
+    sliding_window_length,
 ):
     _, has_dbias = variadic_args
-    num_args = len(value_types)
+    vma = query.vma | key.vma | value.vma
 
-    if layout == AttentionLayout.BTNH.value:
-        q_map = ArrayMapping("batch", "qseq", "qheads", "head")
-        k_map = ArrayMapping("batch", "kvseq", "kvheads", "head")
-        v_map = ArrayMapping("batch", "kvseq", "kvheads", "vhead")
-        act_map = ArrayMapping("batch", "qheads", "qseq")
-        out_map = ArrayMapping("batch", "qseq", "qheads", "vhead")
-        grd_map = ArrayMapping("batch", "qseq", "qheads", "vhead")
-    elif layout == AttentionLayout.BNTH.value:
-        q_map = ArrayMapping("batch", "qheads", "qseq", "head")
-        k_map = ArrayMapping("batch", "kvheads", "kvseq", "head")
-        v_map = ArrayMapping("batch", "kvheads", "kvseq", "vhead")
-        act_map = ArrayMapping("batch", "qheads", "qseq")
-        out_map = ArrayMapping("batch", "qheads", "qseq", "vhead")
-        grd_map = ArrayMapping("batch", "qheads", "qseq", "vhead")
-    else:
-        # Unknown layout – fall back to the (broken) original behaviour so we
-        # don't silently produce wrong sharding for untested layouts.
-        from jax._src.cudnn.fused_attention_stablehlo import _bwd_shardy_rule
-
-        return _bwd_shardy_rule(num_args, has_dbias, is_fp8=False)
-
-    # Dynamic args order (static args are already stripped by custom_partitioning):
-    #   0: query, 1: key, 2: value,
-    #   3: bias, 4: q_seqlen, 5: kv_seqlen, 6: q_offsets, 7: kv_offsets,
-    #   8: page_table_k, 9: page_table_v,
-    #   10: activation, 11: fwd_output, 12: grad_output
-    input_sharding = [q_map, k_map, v_map]
-    num_unused = num_args - 6  # everything except Q,K,V, act, out, grad
-    for i in range(num_unused):
-        input_sharding.append(ArrayMapping(f"unused{i}"))
-    input_sharding.extend([act_map, out_map, grd_map])
-
-    output_sharding = (q_map, k_map, v_map)
     if has_dbias:
-        # dBias has the same mapping as the bias input (index 3), but bias is
-        # unused in our case so we just give it its own independent name.
-        output_sharding = output_sharding + (ArrayMapping("dbias"),)
+        # cuDNN supports bias for this case
+        return (
+            core.ShapedArray(query.shape, query.dtype, sharding=query.sharding, vma=vma),  # grad query
+            core.ShapedArray(key.shape, key.dtype, sharding=key.sharding, vma=vma),  # grad key
+            core.ShapedArray(value.shape, value.dtype, sharding=value.sharding, vma=vma),  # grad value
+            core.ShapedArray(bias.shape, bias.dtype, sharding=bias.sharding, vma=vma),  # grad bias
+        )
+    else:
+        return (
+            core.ShapedArray(query.shape, query.dtype, sharding=query.sharding, vma=vma),  # grad query
+            core.ShapedArray(key.shape, key.dtype, sharding=key.sharding, vma=vma),  # grad key
+            core.ShapedArray(value.shape, value.dtype, sharding=value.sharding, vma=vma),  # grad value
+        )
 
-    return SdyShardingRule(tuple(input_sharding), output_sharding)
 
+_dot_product_attention_bwd_p.def_abstract_eval(_dot_product_attention_bwd_abstract)
+_dot_product_attention_bwd_p_wrapper.def_abstract_eval(_dot_product_attention_bwd_abstract)
 
-_dot_product_attention_bwd_lower.sharding_rule = _fixed_dot_product_attention_bwd_shardy_rule
 
 # Static parameters for our use case (no bias, no seqlen masking, no dropout)
 _SEED = 42
