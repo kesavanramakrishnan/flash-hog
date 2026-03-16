@@ -115,13 +115,13 @@ def flash_bwdbwd0(
     # dD = jnp.empty_like(D)
     # B = jnp.empty_like(D)
     # Instead just define their shapes and dtypes
-    dQ2_shape_dtype = jax.ShapeDtypeStruct(Q.shape, dtype)
-    ddO_shape_dtype = jax.ShapeDtypeStruct(O.shape, dtype)
-    dD_shape_dtype = jax.ShapeDtypeStruct(D.shape, jnp.float32)
-    B_shape_dtype = jax.ShapeDtypeStruct(D.shape, jnp.float32)
+    dQ2_shape_dtype = jax.ShapeDtypeStruct(Q.shape, dtype, vma=jax.typeof(Q).vma)
+    ddO_shape_dtype = jax.ShapeDtypeStruct(O.shape, dtype, vma=jax.typeof(O).vma)
+    dD_shape_dtype = jax.ShapeDtypeStruct(D.shape, jnp.float32, vma=jax.typeof(D).vma)
+    B_shape_dtype = jax.ShapeDtypeStruct(D.shape, jnp.float32, vma=jax.typeof(D).vma)
 
-    dK2_shape_dtype = jax.ShapeDtypeStruct(K.shape, dtype)
-    dV2_shape_dtype = jax.ShapeDtypeStruct(V.shape, dtype)
+    dK2_shape_dtype = jax.ShapeDtypeStruct(K.shape, dtype, vma=jax.typeof(K).vma)
+    dV2_shape_dtype = jax.ShapeDtypeStruct(V.shape, dtype, vma=jax.typeof(V).vma)
 
     def bwd_bwd_kernel_stage1(
         Q_ref,  # (tile_q, hidden_dim)
