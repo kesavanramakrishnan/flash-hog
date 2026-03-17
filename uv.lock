@@ -103,7 +103,7 @@ wheels = [
 
 [[package]]
 name = "flash-hog"
-version = "0.4.5"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "chex" },
