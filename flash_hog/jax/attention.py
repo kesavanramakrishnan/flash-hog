@@ -32,21 +32,19 @@ def dot_product_attention(
     """
     if scale is None:
         scale = query.shape[-1] ** -0.5
-    orig_dtype = query.dtype
-    assert orig_dtype == key.dtype == value.dtype
-
-    if orig_dtype == jnp.float32:
-        query = query.astype(jnp.bfloat16)
-        key = key.astype(jnp.bfloat16)
-        value = value.astype(jnp.bfloat16)
-
+    dtype = query.dtype
+    assert dtype == key.dtype == value.dtype
+    if dtype == jnp.float32:
+        return jax.nn.dot_product_attention(
+            query,
+            key,
+            value,
+            is_causal=is_causal,
+            scale=scale,
+            implementation="xla",
+        )
     mask_type = MaskType.CAUSAL if is_causal else MaskType.NO_MASK
-    out = _dot_product_attention(query, key, value, mask_type=mask_type, scale=scale)
-
-    if orig_dtype == jnp.float32:
-        out = out.astype(orig_dtype)
-
-    return out
+    return _dot_product_attention(query, key, value, mask_type=mask_type, scale=scale)
 
 
 @partial(jax.custom_vjp, nondiff_argnames=["mask_type", "scale"])
