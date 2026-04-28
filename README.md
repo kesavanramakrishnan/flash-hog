@@ -11,7 +11,9 @@ This kernel achieves around a 3.7x speedup over an XLA optimized kernel, with li
 </p>
 
 ## Installation
-TODO
+```sh
+uv add flash-hog
+```
 
 ## Method
 Flash Hog does 4 recomputation passes to avoid any atomics or saving any intermediary tensors of shape `(N_Q, N_K)`.
