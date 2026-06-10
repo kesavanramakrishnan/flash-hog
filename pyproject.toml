@@ -18,6 +18,8 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "flash_hog"
 module-root = ""
+# don't package a locally built TK plugin (csrc/tk_bwdbwd/libtk_bwdbwd.so) into the wheel
+wheel-exclude = ["**/*.so"]
 
 
 [tool.uv]
