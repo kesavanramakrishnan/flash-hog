@@ -19,12 +19,13 @@ uv add flash-hog
 Opt-in TK kernels for the double-backward, ~1.65x faster end-to-end on H200
 (causal, head_dim 64, seq % 128 == 0). Off by default; unsupported shapes fall back to Pallas.
 ```sh
-THUNDERKITTENS_PATH=/path/to/ThunderKittens flash_hog/csrc/tk_bwdbwd/build.sh   # build once
+uv add 'flash-hog[tk]'   # optional: CUDA build tools from PyPI (needs a host C++ compiler)
 ```
 ```python
 from flash_hog.jax import _tk_gpu as tk
-tk.enable()
+tk.enable()   # JIT-builds the plugin on first use (cached); then TK kernels are live
 ```
+Set `THUNDERKITTENS_PATH` to use a local ThunderKittens checkout instead of the auto-fetched one.
 
 ## Method
 Flash Hog does 4 recomputation passes to avoid any atomics or saving any intermediary tensors of shape `(N_Q, N_K)`.

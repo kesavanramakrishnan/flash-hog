@@ -1,28 +1,16 @@
 """ThunderKittens (Hopper/SM90) double-backward for causal attention.
 
-Targeted for Hopper architecture
+Default path is Pallas; opt in to TK:
 
-Default path is Pallas, must opt in to us TK:
+    pip install 'flash-hog[tk]'        # CUDA build tools from PyPI
 
-  1. build the plugin once:  THUNDERKITTENS_PATH=... flash_hog/csrc/tk_bwdbwd/build.sh
-  2. opt in at runtime:
+    from flash_hog.jax import _tk_gpu as tk
+    tk.enable()    # JIT-builds the plugin on first use (cached); TK kernels live
+    tk.disable()   # back to Pallas
 
-       from flash_hog.jax import _tk_gpu as tk
-       tk.enable()    # double-backward now runs with TK kernels
-       ...
-       tk.disable()   # normal Pallas
-
-``enable()`` swaps flash-hog's double-backward rule for one that uses the TK kernels
-when ``supported(...)`` says so and falls back to the original Pallas rule per-call
-otherwise (non-causal, head_dim != 64, GQA, T % 128 != 0, non-Hopper).
-
-The kernels live in ``flash_hog/csrc/tk_bwdbwd/`` and are compiled out-of-band into
-``libtk_bwdbwd.so`` (see ``build.sh`` there).  This module loads the library lazily
-and registers the XLA FFI target on first use.
-
-Environment vars:
-  - ``FLASH_HOG_TK_LIB``     -- path to libtk_bwdbwd.so (default: next to the sources)
-  - ``FLASH_HOG_DISABLE_TK`` -- treat the library as absent (enable() then errors)
+enable() swaps flash-hog's double-backward rule for the TK kernels where
+supported() (causal, head_dim 64, seq % 128 == 0, no GQA, Hopper) and falls back
+to the Pallas rule per-call otherwise. FLASH_HOG_TK_LIB overrides the plugin path.
 """
 
 from __future__ import annotations
@@ -36,23 +24,36 @@ import jax.numpy as jnp
 import numpy as np
 
 _LIB_ENV = "FLASH_HOG_TK_LIB"
-_DISABLE_ENV = "FLASH_HOG_DISABLE_TK"
-_DEFAULT_LIB = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "csrc", "tk_bwdbwd", "libtk_bwdbwd.so",
-)
 _FFI_TARGET = "tk_bwdbwd"
+
+
+def _preload_cuda_libs() -> None:
+    # plugin is built with `-cudart none`: resolve driver/cudart symbols from the
+    # process by loading them RTLD_GLOBAL first
+    from flash_hog.jax import _tk_build
+
+    try:
+        ctypes.CDLL("libcuda.so.1", mode=ctypes.RTLD_GLOBAL)
+    except OSError:
+        pass
+    for libdir in _tk_build.nvidia_wheel_paths("lib"):
+        for so in sorted(libdir.glob("libcudart.so.*")):
+            try:
+                ctypes.CDLL(str(so), mode=ctypes.RTLD_GLOBAL)
+                return
+            except OSError:
+                continue
 
 
 @functools.cache
 def _lib() -> ctypes.CDLL | None:
-    """Load the FFI library and register the XLA target. None if unavailable."""
-    if os.environ.get(_DISABLE_ENV):
+    from flash_hog.jax import _tk_build
+
+    path = os.environ.get(_LIB_ENV) or _tk_build.cached_so()
+    if path is None or not os.path.exists(path):
         return None
-    path = os.environ.get(_LIB_ENV, _DEFAULT_LIB)
-    if not os.path.exists(path):
-        return None
-    lib = ctypes.CDLL(path)
+    _preload_cuda_libs()
+    lib = ctypes.CDLL(str(path))
     jax.ffi.register_ffi_target(_FFI_TARGET, jax.ffi.pycapsule(lib.TkBwdBwd), platform="CUDA")
     return lib
 
@@ -80,10 +81,7 @@ def supported(*, is_causal: bool, seq_len: int, head_dim: int,
 
 
 def flash_bwdbwd(*, Q, K, V, O, dO, ddQ, ddK, ddV, L, scale: float):
-    """Causal-attention double-backward via the TK kernels.
-
-    Arguments are BTNH and output is dQ2, dK2, dV2, ddO
-    """
+    """Causal-attention double-backward. Arguments are BTNH; returns dQ2, dK2, dV2, ddO."""
     B, T, N, Hd = Q.shape
 
     def to_bhtd(x):
@@ -92,7 +90,6 @@ def flash_bwdbwd(*, Q, K, V, O, dO, ddQ, ddK, ddV, L, scale: float):
     Qb, Kb, Vb, dOb, ddQb, ddKb, ddVb = (
         to_bhtd(x).astype(jnp.bfloat16) for x in (Q, K, V, dO, ddQ, ddK, ddV)
     )
-    # D = rowsum(dO * O)
     D = jnp.sum(to_bhtd(dO).astype(jnp.float32) * to_bhtd(O).astype(jnp.float32), axis=-1)
     Lf = L.reshape(B, N, T).astype(jnp.float32)
 
@@ -105,24 +102,22 @@ def flash_bwdbwd(*, Q, K, V, O, dO, ddQ, ddK, ddV, L, scale: float):
     dQ2, ddO, dK2, dV2 = (to_bhtd(x).astype(Q.dtype) for x in outs[:4])
     return dQ2, dK2, dV2, ddO
 
-# opt in switch
-_original_rule = None   # non-None iff the TK rule is currently installed
+
+_original_rule = None   # non-None iff the TK rule is installed
 
 
 def enable() -> None:
-    """Opt in: route the attention double-backward through the TK kernels.
-
-    Per-call fallback: shapes the kernels can't serve still run the original
-    Pallas rule.  Idempotent; undo with ``disable()``.
-    """
+    """Opt in: route the double-backward through the TK kernels (per-call fallback)."""
     global _original_rule
     if _lib() is None:
-        raise RuntimeError(
-            "libtk_bwdbwd.so not found — build it with flash_hog/csrc/tk_bwdbwd/build.sh "
-            f"(or point {_LIB_ENV} at it)."
-        )
+        from flash_hog.jax import _tk_build
+
+        _tk_build.build()
+        _lib.cache_clear()
+        if _lib() is None:
+            raise RuntimeError("TK plugin built but failed to load")
     if _original_rule is not None:
-        return  # already enabled
+        return
 
     from jax._src.cudnn.fused_attention_stablehlo import MaskType
 
@@ -149,7 +144,7 @@ def enable() -> None:
 
     _original_rule = pallas_rule
     impl.dot_product_attention_bwd_rule_bwd_rule = tk_rule
-    jax.clear_caches()   # already-traced double-backwards captured the old rule
+    jax.clear_caches()   # traced double-backwards captured the old rule
 
 
 def disable() -> None:

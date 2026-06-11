@@ -10,7 +10,7 @@
 //            dD, B                        f32  (B, H, T)       [stage1->stage2 scratch]
 //
 // Constraints: SM90 (Hopper), head_dim == 64, T % 128 == 0, causal, q_heads == kv_heads.
-// Build: ./build.sh (see that file for requirements).
+// Built at runtime by flash_hog/jax/_tk_build.py (pip CUDA tools, cached).
 
 #include "stage1.cuh"
 #include "stage2.cuh"
